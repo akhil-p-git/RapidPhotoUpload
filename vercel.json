@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "buildCommand": "cd apps/web && pnpm install && pnpm build",
+  "outputDirectory": "apps/web/dist",
+  "devCommand": "cd apps/web && pnpm dev",
+  "installCommand": "pnpm install",
+  "framework": null,
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
