@@ -1,0 +1,398 @@
+{
+  "name": "05 - Storage Tiering & Optimization",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "storage-tiering",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook - Storage Tiering",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "webhookId": "storage-tiering"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"status\": \"processing\", \"photoId\": $json.body.photoId } }}"
+      },
+      "id": "webhook-response",
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, uploaded_at, storage_path, storage_type, file_size_bytes FROM photos WHERE id = $1::uuid",
+        "additionalFields": {
+          "queryParameters": "={{ [$json.body.photoId] }}"
+        }
+      },
+      "id": "get-photo-info",
+      "name": "Get Photo Info",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [650, 300],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT get_photo_access_frequency($1::uuid) as access_count",
+        "additionalFields": {
+          "queryParameters": "={{ [$json.body.photoId] }}"
+        }
+      },
+      "id": "check-access-frequency",
+      "name": "Check Access Frequency",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [850, 300],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Determine storage tier based on age and access frequency\nconst photo = $('Get Photo Info').first().json;\nconst accessData = $input.first().json;\n\nconst uploadedAt = new Date(photo.uploaded_at);\nconst now = new Date();\nconst daysOld = Math.floor((now - uploadedAt) / (1000 * 60 * 60 * 24));\nconst accessCount = accessData.access_count || 0;\n\nlet storageTier = 'HOT'; // Default to hot storage\nlet shouldCompress = false;\n\n// Determine tier\nif (daysOld > 90 && accessCount < 5) {\n  // Old and rarely accessed -> move to cold storage\n  storageTier = 'COLD';\n} else if (daysOld > 180 && accessCount < 10) {\n  // Very old and rarely accessed -> glacier\n  storageTier = 'GLACIER';\n} else if (daysOld > 365 && accessCount < 3) {\n  // Very old and very rarely accessed -> deep archive\n  storageTier = 'DEEP_ARCHIVE';\n} else if (accessCount > 20) {\n  // Frequently accessed -> keep in hot\n  storageTier = 'HOT';\n}\n\n// Check if compression is needed (for large files)\nif (photo.file_size_bytes > 5 * 1024 * 1024) { // > 5MB\n  shouldCompress = true;\n}\n\nreturn {\n  json: {\n    photoId: photo.id,\n    storageTier: storageTier,\n    shouldCompress: shouldCompress,\n    daysOld: daysOld,\n    accessCount: accessCount,\n    currentStorage: photo.storage_path\n  }\n};"
+      },
+      "id": "determine-tier",
+      "name": "Determine Storage Tier",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.storageTier }}",
+              "operation": "notEqual",
+              "value2": "HOT"
+            }
+          ]
+        }
+      },
+      "id": "check-needs-move",
+      "name": "Check If Needs Move",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.AWS_S3_ENDPOINT || 'http://minio:9000' }}/move-to-tier",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "sourcePath",
+              "value": "={{ $json.currentStorage }}"
+            },
+            {
+              "name": "targetTier",
+              "value": "={{ $json.storageTier }}"
+            },
+            {
+              "name": "photoId",
+              "value": "={{ $json.photoId }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "move-to-tier",
+      "name": "Move to Storage Tier",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1450, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.shouldCompress }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "check-compress",
+      "name": "Check If Needs Compression",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1250, 400]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.currentStorage }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "id": "download-for-compression",
+      "name": "Download for Compression",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1450, 400]
+    },
+    {
+      "parameters": {
+        "command": "convert - -quality 85 -strip jpeg:-",
+        "stdin": "={{ $binary.data }}"
+      },
+      "id": "compress-image",
+      "name": "Compress Image",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1650, 400]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $json.currentStorage }}",
+        "sendBody": true,
+        "contentType": "binary",
+        "body": "={{ $binary.data }}",
+        "options": {}
+      },
+      "id": "upload-compressed",
+      "name": "Upload Compressed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1850, 400]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE photos SET processing_status = 'COMPLETED', storage_tier = $1, processed_at = NOW() WHERE id = $2::uuid",
+        "additionalFields": {
+          "queryParameters": "={{ [$json.storageTier, $json.photoId] }}"
+        }
+      },
+      "id": "final-update",
+      "name": "Final Database Update",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1650, 300],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_WEBHOOK_URL || 'http://host.docker.internal:8080/api/webhooks/processing-complete' }}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "photoId",
+              "value": "={{ $json.photoId }}"
+            },
+            {
+              "name": "status",
+              "value": "COMPLETED"
+            },
+            {
+              "name": "storageTier",
+              "value": "={{ $json.storageTier }}"
+            },
+            {
+              "name": "processedAt",
+              "value": "={{ $now.toISO() }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "notify-backend",
+      "name": "Notify Backend",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1850, 300]
+    }
+  ],
+  "connections": {
+    "Webhook - Storage Tiering": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Photo Info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Photo Info": {
+      "main": [
+        [
+          {
+            "node": "Check Access Frequency",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Access Frequency": {
+      "main": [
+        [
+          {
+            "node": "Determine Storage Tier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Determine Storage Tier": {
+      "main": [
+        [
+          {
+            "node": "Check If Needs Move",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Check If Needs Compression",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check If Needs Move": {
+      "main": [
+        [
+          {
+            "node": "Move to Storage Tier",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Final Database Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Move to Storage Tier": {
+      "main": [
+        [
+          {
+            "node": "Final Database Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check If Needs Compression": {
+      "main": [
+        [
+          {
+            "node": "Download for Compression",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Final Database Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download for Compression": {
+      "main": [
+        [
+          {
+            "node": "Compress Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compress Image": {
+      "main": [
+        [
+          {
+            "node": "Upload Compressed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload Compressed": {
+      "main": [
+        [
+          {
+            "node": "Final Database Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Final Database Update": {
+      "main": [
+        [
+          {
+            "node": "Notify Backend",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2024-01-01T00:00:00.000Z",
+  "versionId": "1"
+}
+

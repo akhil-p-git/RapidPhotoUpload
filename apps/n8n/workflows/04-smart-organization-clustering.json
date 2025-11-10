@@ -1,0 +1,214 @@
+{
+  "name": "04 - Smart Organization & Clustering",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "smart-organization",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook - Smart Organization",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "webhookId": "smart-organization"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"status\": \"organizing\", \"photoId\": $json.body.photoId } }}"
+      },
+      "id": "webhook-response",
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT p.id, p.user_id, p.taken_at, p.location_lat, p.location_lon, p.exif_data, (SELECT json_agg(json_build_object('tag', tag, 'confidence', confidence)) FROM ai_tags WHERE photo_id = p.id) as ai_tags FROM photos p WHERE p.id = $1::uuid",
+        "additionalFields": {
+          "queryParameters": "={{ [$json.body.photoId] }}"
+        }
+      },
+      "id": "get-photo-data",
+      "name": "Get Photo Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [650, 300],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Analyze photo and generate collection suggestions\nconst photo = $input.first().json;\nconst collections = [];\n\n// Time-based clustering\nif (photo.taken_at) {\n  const date = new Date(photo.taken_at);\n  const year = date.getFullYear();\n  const month = date.getMonth() + 1;\n  const season = month >= 3 && month <= 5 ? 'Spring' :\n                  month >= 6 && month <= 8 ? 'Summer' :\n                  month >= 9 && month <= 11 ? 'Fall' : 'Winter';\n  \n  collections.push({\n    name: `${season} ${year}`,\n    criteria: {\n      type: 'time_based',\n      year: year,\n      season: season\n    }\n  });\n  \n  // Monthly collection\n  const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',\n                      'July', 'August', 'September', 'October', 'November', 'December'];\n  collections.push({\n    name: `${monthNames[month - 1]} ${year}`,\n    criteria: {\n      type: 'time_based',\n      year: year,\n      month: month\n    }\n  });\n}\n\n// Location-based clustering\nif (photo.location_lat && photo.location_lon) {\n  collections.push({\n    name: 'Location Photos',\n    criteria: {\n      type: 'location_based',\n      hasLocation: true\n    }\n  });\n}\n\n// Content-based clustering from AI tags\nif (photo.ai_tags && Array.isArray(photo.ai_tags)) {\n  const tags = photo.ai_tags.map(t => t.tag.toLowerCase());\n  \n  // Scene-based collections\n  const sceneKeywords = ['beach', 'sunset', 'sunrise', 'mountain', 'forest', 'city', 'night', 'portrait'];\n  sceneKeywords.forEach(keyword => {\n    if (tags.some(t => t.includes(keyword))) {\n      collections.push({\n        name: `${keyword.charAt(0).toUpperCase() + keyword.slice(1)} Photos`,\n        criteria: {\n          type: 'content_based',\n          tags: [keyword]\n        }\n      });\n    }\n  });\n  \n  // Event-based collections\n  const eventKeywords = ['wedding', 'birthday', 'party', 'vacation', 'trip', 'family', 'friends'];\n  eventKeywords.forEach(keyword => {\n    if (tags.some(t => t.includes(keyword))) {\n      collections.push({\n        name: `${keyword.charAt(0).toUpperCase() + keyword.slice(1)} Collection`,\n        criteria: {\n          type: 'content_based',\n          tags: [keyword]\n        }\n      });\n    }\n  });\n}\n\nreturn {\n  json: {\n    photoId: photo.id,\n    userId: photo.user_id,\n    collections: collections,\n    photoData: photo\n  }\n};"
+      },
+      "id": "generate-collections",
+      "name": "Generate Collection Suggestions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO collections (user_id, name, auto_generated, query_criteria, created_at) VALUES {{ $json.collections.map(c => `('${$json.userId}', '${c.name.replace(/'/g, \"''\")}', true, '${JSON.stringify(c.criteria).replace(/'/g, \"''\")}'::jsonb, NOW())`) }} ON CONFLICT (user_id, name) DO UPDATE SET updated_at = NOW() RETURNING id, name",
+        "options": {}
+      },
+      "id": "create-collections",
+      "name": "Create Collections",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1050, 300],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Match photo to collections and add to them\nconst photoId = $('Generate Collection Suggestions').first().json.photoId;\nconst collections = $input.all();\n\nconst insertStatements = collections.map(c => ({\n  collectionId: c.id,\n  photoId: photoId\n}));\n\nreturn insertStatements.map(item => ({ json: item }));"
+      },
+      "id": "prepare-photo-collections",
+      "name": "Prepare Photo-Collection Links",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO collection_photos (collection_id, photo_id, added_at) VALUES {{ $json.map(item => `('${item.collectionId}', '${item.photoId}', NOW())`) }} ON CONFLICT DO NOTHING",
+        "options": {}
+      },
+      "id": "add-photo-to-collections",
+      "name": "Add Photo to Collections",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1450, 300],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:5678/webhook/storage-tiering",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "photoId",
+              "value": "={{ $('Generate Collection Suggestions').first().json.photoId }}"
+            },
+            {
+              "name": "userId",
+              "value": "={{ $('Generate Collection Suggestions').first().json.userId }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "trigger-storage-tiering",
+      "name": "Trigger Storage Tiering",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1650, 300]
+    }
+  ],
+  "connections": {
+    "Webhook - Smart Organization": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Photo Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Photo Data": {
+      "main": [
+        [
+          {
+            "node": "Generate Collection Suggestions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Collection Suggestions": {
+      "main": [
+        [
+          {
+            "node": "Create Collections",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Collections": {
+      "main": [
+        [
+          {
+            "node": "Prepare Photo-Collection Links",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Photo-Collection Links": {
+      "main": [
+        [
+          {
+            "node": "Add Photo to Collections",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add Photo to Collections": {
+      "main": [
+        [
+          {
+            "node": "Trigger Storage Tiering",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2024-01-01T00:00:00.000Z",
+  "versionId": "1"
+}
+

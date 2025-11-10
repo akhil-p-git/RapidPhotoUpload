@@ -1,0 +1,99 @@
+spring:
+  application:
+    name: rapidphoto-upload-backend
+
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:54321/rapidphotoupload}
+    username: ${DATABASE_USERNAME:postgres}
+    password: ${DATABASE_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: validate  # Changed from 'update' to 'validate' - Flyway handles schema
+    show-sql: true
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migration
+    schemas: public
+
+  servlet:
+    multipart:
+      enabled: true
+      max-file-size: 100MB
+      max-request-size: 1GB
+
+server:
+  port: ${SERVER_PORT:8080}
+  compression:
+    enabled: true
+    mime-types: application/json,application/xml,text/html,text/xml,text/plain,image/jpeg,image/png,image/gif
+
+# n8n Integration
+n8n:
+  base-url: ${N8N_BASE_URL:http://localhost:5678}
+  webhook:
+    photo-uploaded: /webhook/photo-uploaded
+    photo-processed: /webhook/photo-processed
+    upload-failed: /webhook/upload-failed
+
+# Storage Configuration
+storage:
+  type: ${STORAGE_TYPE:local}  # Environment variable with fallback to 'local'
+  local:
+    upload-dir: ${STORAGE_LOCAL_DIR:./uploads}
+  s3:
+    bucket-name: ${S3_BUCKET_NAME:rapidphotoupload-media}
+    region: ${AWS_REGION:auto}
+    access-key: ${AWS_ACCESS_KEY:}
+    secret-key: ${AWS_SECRET_KEY:}
+    endpoint: ${S3_ENDPOINT:}
+
+# Concurrency Configuration
+upload:
+  thread-pool:
+    core-size: ${UPLOAD_CORE_SIZE:20}
+    max-size: ${UPLOAD_MAX_SIZE:100}
+    queue-capacity: ${UPLOAD_QUEUE_CAPACITY:500}
+  chunk-size: ${UPLOAD_CHUNK_SIZE:5242880}
+
+# JWT Configuration
+jwt:
+  secret: ${JWT_SECRET:your-256-bit-secret-key-change-this-in-production-minimum-32-characters-long}
+  expiration: ${JWT_EXPIRATION:86400000} # 24 hours in milliseconds
+
+# Rate Limiting Configuration
+rate-limit:
+  default:
+    capacity: 100
+    refill-interval: 60  # seconds
+  upload:
+    capacity: 200
+    refill-interval: 60  # seconds
+
+# Management & Monitoring
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+  endpoint:
+    health:
+      show-details: when-authorized
+
+# Logging
+logging:
+  level:
+    com.rapidphoto: DEBUG
+    org.springframework.web: INFO
+    org.springframework.security: DEBUG

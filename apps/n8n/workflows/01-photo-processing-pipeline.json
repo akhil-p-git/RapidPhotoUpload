@@ -1,0 +1,221 @@
+{
+  "name": "01 - Main Photo Processing Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "photo-uploaded",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook - Photo Uploaded",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "webhookId": "photo-uploaded"
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "photoId",
+              "value": "={{ $json.body.photoId }}"
+            },
+            {
+              "name": "userId",
+              "value": "={{ $json.body.userId }}"
+            },
+            {
+              "name": "fileName",
+              "value": "={{ $json.body.fileName }}"
+            },
+            {
+              "name": "fileSizeBytes",
+              "value": "={{ $json.body.fileSizeBytes }}"
+            },
+            {
+              "name": "storageLocation",
+              "value": "={{ $json.body.storageLocation }}"
+            },
+            {
+              "name": "storageBasePath",
+              "value": "/app/storage"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-variables",
+      "name": "Set Variables",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "operation": "readFile",
+        "fileName": "={{ $json.storageBasePath }}/{{ $json.storageLocation }}",
+        "options": {
+          "fileContent": "binary"
+        }
+      },
+      "id": "read-file",
+      "name": "Read File from Storage",
+      "type": "n8n-nodes-base.readBinaryFile",
+      "typeVersion": 1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract EXIF data using exiftool\nconst { execSync } = require('child_process');\nconst fs = require('fs');\nconst path = require('path');\n\nconst items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const filePath = item.json.storageBasePath + '/' + item.json.storageLocation;\n  \n  try {\n    // Run exiftool\n    const exifJson = execSync(`exiftool -j \"${filePath}\"`, { encoding: 'utf-8' });\n    const exifData = JSON.parse(exifJson)[0];\n    \n    // Extract relevant fields\n    const metadata = {\n      cameraMake: exifData.Make || null,\n      cameraModel: exifData.Model || null,\n      dateTaken: exifData.DateTimeOriginal || exifData.CreateDate || null,\n      gpsLatitude: exifData.GPSLatitude || null,\n      gpsLongitude: exifData.GPSLongitude || null,\n      imageWidth: exifData.ImageWidth || null,\n      imageHeight: exifData.ImageHeight || null,\n      orientation: exifData.Orientation || null,\n      iso: exifData.ISO || null,\n      exposureTime: exifData.ExposureTime || null,\n      fNumber: exifData.FNumber || null,\n      focalLength: exifData.FocalLength || null,\n      flash: exifData.Flash || null,\n      rawExif: exifData\n    };\n    \n    results.push({\n      json: {\n        ...item.json,\n        exifData: metadata\n      },\n      binary: item.binary\n    });\n  } catch (error) {\n    console.error('EXIF extraction failed:', error);\n    results.push({\n      json: {\n        ...item.json,\n        exifData: { error: error.message }\n      },\n      binary: item.binary\n    });\n  }\n}\n\nreturn results;"
+      },
+      "id": "extract-exif",
+      "name": "Extract EXIF Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generate thumbnails using ImageMagick\nconst { execSync } = require('child_process');\nconst path = require('path');\n\nconst items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const sourceFile = item.json.storageBasePath + '/' + item.json.storageLocation;\n  const photoId = item.json.photoId;\n  const thumbDir = item.json.storageBasePath + '/thumbnails/' + item.json.userId;\n  \n  // Create thumbnail directory\n  execSync(`mkdir -p \"${thumbDir}\"`);\n  \n  const thumbnails = {\n    small: `${thumbDir}/${photoId}_small.jpg`,\n    medium: `${thumbDir}/${photoId}_medium.jpg`,\n    large: `${thumbDir}/${photoId}_large.jpg`\n  };\n  \n  try {\n    // Generate small (150px)\n    execSync(`convert \"${sourceFile}\" -resize 150x150^ -gravity center -extent 150x150 -quality 85 \"${thumbnails.small}\"`);\n    \n    // Generate medium (600px)\n    execSync(`convert \"${sourceFile}\" -resize 600x600^ -gravity center -extent 600x600 -quality 85 \"${thumbnails.medium}\"`);\n    \n    // Generate large (1200px)\n    execSync(`convert \"${sourceFile}\" -resize 1200x1200 -quality 90 \"${thumbnails.large}\"`);\n    \n    results.push({\n      json: {\n        ...item.json,\n        thumbnailSmall: `/thumbnails/${item.json.userId}/${photoId}_small.jpg`,\n        thumbnailMedium: `/thumbnails/${item.json.userId}/${photoId}_medium.jpg`,\n        thumbnailLarge: `/thumbnails/${item.json.userId}/${photoId}_large.jpg`\n      },\n      binary: item.binary\n    });\n  } catch (error) {\n    console.error('Thumbnail generation failed:', error);\n    results.push({\n      json: {\n        ...item.json,\n        thumbnailError: error.message\n      },\n      binary: item.binary\n    });\n  }\n}\n\nreturn results;"
+      },
+      "id": "generate-thumbnails",
+      "name": "Generate Thumbnails",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Calculate perceptual hash using Python imagehash\nconst { execSync } = require('child_process');\nconst fs = require('fs');\nconst path = require('path');\n\nconst items = $input.all();\nconst results = [];\n\n// Create temp Python script\nconst pythonScript = `\nimport sys\nimport imagehash\nfrom PIL import Image\n\nimage_path = sys.argv[1]\nimg = Image.open(image_path)\nhash_value = str(imagehash.phash(img))\nprint(hash_value)\n`;\n\nconst scriptPath = '/tmp/calculate_phash.py';\nfs.writeFileSync(scriptPath, pythonScript);\n\nfor (const item of items) {\n  const filePath = item.json.storageBasePath + '/' + item.json.storageLocation;\n  \n  try {\n    const phash = execSync(`python3 ${scriptPath} \"${filePath}\"`, { encoding: 'utf-8' }).trim();\n    \n    results.push({\n      json: {\n        ...item.json,\n        perceptualHash: phash\n      },\n      binary: item.binary\n    });\n  } catch (error) {\n    console.error('pHash calculation failed:', error);\n    results.push({\n      json: {\n        ...item.json,\n        perceptualHash: null,\n        phashError: error.message\n      },\n      binary: item.binary\n    });\n  }\n}\n\n// Cleanup\nif (fs.existsSync(scriptPath)) {\n  fs.unlinkSync(scriptPath);\n}\n\nreturn results;"
+      },
+      "id": "calculate-phash",
+      "name": "Calculate Perceptual Hash",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE photos SET exif_data = $1::jsonb, thumbnail_small_url = $2, thumbnail_medium_url = $3, thumbnail_large_url = $4, perceptual_hash = $5, status = 'PROCESSING', updated_at = NOW() WHERE id = $6::uuid RETURNING id, file_name, status",
+        "additionalFields": {
+          "queryParameters": "={{ [\n  JSON.stringify($json.exifData),\n  $json.thumbnailSmall || null,\n  $json.thumbnailMedium || null,\n  $json.thumbnailLarge || null,\n  $json.perceptualHash || null,\n  $json.photoId\n] }}"
+        }
+      },
+      "id": "update-postgres",
+      "name": "Update PostgreSQL",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1450, 300],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseCode": 200,
+        "responseBody": "={{ {\n  \"success\": true,\n  \"photoId\": $json.photoId,\n  \"status\": \"processing_complete\",\n  \"thumbnails\": {\n    \"small\": $json.thumbnailSmall,\n    \"medium\": $json.thumbnailMedium,\n    \"large\": $json.thumbnailLarge\n  },\n  \"exifExtracted\": true,\n  \"phash\": $json.perceptualHash\n} }}"
+      },
+      "id": "webhook-response",
+      "name": "Send Success Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1650, 300]
+    }
+  ],
+  "connections": {
+    "Webhook - Photo Uploaded": {
+      "main": [
+        [
+          {
+            "node": "Set Variables",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Variables": {
+      "main": [
+        [
+          {
+            "node": "Read File from Storage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read File from Storage": {
+      "main": [
+        [
+          {
+            "node": "Extract EXIF Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract EXIF Data": {
+      "main": [
+        [
+          {
+            "node": "Generate Thumbnails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Thumbnails": {
+      "main": [
+        [
+          {
+            "node": "Calculate Perceptual Hash",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Perceptual Hash": {
+      "main": [
+        [
+          {
+            "node": "Update PostgreSQL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update PostgreSQL": {
+      "main": [
+        [
+          {
+            "node": "Send Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2024-01-01T00:00:00.000Z",
+  "versionId": "1"
+}

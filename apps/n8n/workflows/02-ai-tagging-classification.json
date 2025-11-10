@@ -1,0 +1,286 @@
+{
+  "name": "02 - AI Tagging & Classification",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ai-tagging",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook - AI Tagging",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "webhookId": "ai-tagging"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"status\": \"processing\", \"photoId\": $json.body.photoId } }}"
+      },
+      "id": "webhook-response",
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.body.storageLocation }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "id": "load-image",
+      "name": "Load Image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://vision.googleapis.com/v1/images:annotate?key={{ $env.GOOGLE_VISION_API_KEY }}",
+        "sendBody": true,
+        "contentType": "json",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "requests",
+              "value": "={{ [{\n  \"image\": {\n    \"content\": $binary.data.toString('base64')\n  },\n  \"features\": [\n    {\"type\": \"LABEL_DETECTION\", \"maxResults\": 20},\n    {\"type\": \"OBJECT_LOCALIZATION\", \"maxResults\": 10},\n    {\"type\": \"SAFE_SEARCH_DETECTION\"},\n    {\"type\": \"IMAGE_PROPERTIES\"}\n  ]\n}] }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "google-vision-api",
+      "name": "Google Vision API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract tags and process results\nconst response = $input.first().json;\nconst photoId = $('Webhook - AI Tagging').first().json.body.photoId;\n\nconst tags = [];\nconst objects = [];\nconst safeSearch = {};\n\nif (response.responses && response.responses[0]) {\n  const result = response.responses[0];\n  \n  // Extract labels\n  if (result.labelAnnotations) {\n    result.labelAnnotations.forEach(label => {\n      tags.push({\n        photoId: photoId,\n        tag: label.description,\n        confidence: label.score,\n        source: 'google_vision',\n        category: 'label'\n      });\n    });\n  }\n  \n  // Extract objects\n  if (result.localizedObjectAnnotations) {\n    result.localizedObjectAnnotations.forEach(obj => {\n      objects.push({\n        photoId: photoId,\n        tag: obj.name,\n        confidence: obj.score,\n        source: 'google_vision',\n        category: 'object'\n      });\n    });\n  }\n  \n  // Safe search\n  if (result.safeSearchAnnotation) {\n    safeSearch.adult = result.safeSearchAnnotation.adult;\n    safeSearch.violence = result.safeSearchAnnotation.violence;\n    safeSearch.racy = result.safeSearchAnnotation.racy;\n  }\n  \n  // Dominant colors\n  if (result.imagePropertiesAnnotation && result.imagePropertiesAnnotation.dominantColors) {\n    result.imagePropertiesAnnotation.dominantColors.colors.slice(0, 5).forEach((color, idx) => {\n      tags.push({\n        photoId: photoId,\n        tag: `color_${idx + 1}`,\n        confidence: color.score,\n        source: 'google_vision',\n        category: 'color',\n        metadata: {\n          rgb: color.color\n        }\n      });\n    });\n  }\n}\n\nreturn {\n  json: {\n    photoId: photoId,\n    tags: [...tags, ...objects],\n    safeSearch: safeSearch,\n    isInappropriate: safeSearch.adult === 'VERY_LIKELY' || safeSearch.violence === 'VERY_LIKELY' || safeSearch.racy === 'VERY_LIKELY'\n  }\n};"
+      },
+      "id": "extract-tags",
+      "name": "Extract Tags",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.isInappropriate }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "check-content",
+      "name": "Content Moderation Check",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ai_tags (photo_id, tag, confidence, source, category, detected_at) VALUES {{ $json.tags.map(t => `('${t.photoId}', '${t.tag.replace(/'/g, \"''\")}', ${t.confidence}, '${t.source}', '${t.category || 'label'}', NOW())`).join(', ') }} ON CONFLICT DO NOTHING",
+        "options": {}
+      },
+      "id": "save-tags",
+      "name": "Save AI Tags",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1450, 200],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE photos SET ai_tags = $1::jsonb, processing_status = 'DUPLICATE_CHECK' WHERE id = $2::uuid",
+        "additionalFields": {
+          "queryParameters": "={{ [JSON.stringify($json.tags.map(t => ({ tag: t.tag, confidence: t.confidence, source: t.source }))), $json.photoId] }}"
+        }
+      },
+      "id": "update-photo-tags",
+      "name": "Update Photo Tags",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1450, 300],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:5678/webhook/duplicate-detection",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "photoId",
+              "value": "={{ $json.photoId }}"
+            },
+            {
+              "name": "userId",
+              "value": "={{ $('Webhook - AI Tagging').first().json.body.userId }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "trigger-duplicate-check",
+      "name": "Trigger Duplicate Check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1650, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE photos SET processing_status = 'BLOCKED', metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{blocked_reason}', '\"inappropriate_content\"'::jsonb) WHERE id = $1::uuid",
+        "additionalFields": {
+          "queryParameters": "={{ [$json.photoId] }}"
+        }
+      },
+      "id": "block-inappropriate",
+      "name": "Block Inappropriate",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1250, 500],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "PostgreSQL"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook - AI Tagging": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Load Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Image": {
+      "main": [
+        [
+          {
+            "node": "Google Vision API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Vision API": {
+      "main": [
+        [
+          {
+            "node": "Extract Tags",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Tags": {
+      "main": [
+        [
+          {
+            "node": "Content Moderation Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Content Moderation Check": {
+      "main": [
+        [
+          {
+            "node": "Save AI Tags",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Update Photo Tags",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Block Inappropriate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save AI Tags": {
+      "main": [
+        [
+          {
+            "node": "Update Photo Tags",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Photo Tags": {
+      "main": [
+        [
+          {
+            "node": "Trigger Duplicate Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2024-01-01T00:00:00.000Z",
+  "versionId": "1"
+}
+

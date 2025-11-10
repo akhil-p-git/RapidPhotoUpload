@@ -1,0 +1,181 @@
+{
+  "name": "03 - Duplicate Detection",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "photo-uploaded",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook - Photo Uploaded",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "webhookId": "photo-uploaded-dup"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"success\": true, \"photoId\": $json.photoId, \"duplicates\": $json.duplicates } }}"
+      },
+      "id": "send-success-response",
+      "name": "Send Success Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "photoId",
+              "value": "={{ $json.photoId }}"
+            },
+            {
+              "name": "userId",
+              "value": "={{ $json.userId }}"
+            },
+            {
+              "name": "backendUrl",
+              "value": "http://host.docker.internal:8080"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-variables",
+      "name": "Set Variables",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.backendUrl }}/api/photos/{{ $json.photoId }}",
+        "options": {}
+      },
+      "id": "fetch-photo",
+      "name": "Fetch Photo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const photoId = item.json.photoId;\n  const perceptualHash = item.json.perceptualHash;\n  const backendUrl = item.json.backendUrl;\n  \n  if (!perceptualHash) {\n    results.push({\n      json: {\n        ...item.json,\n        duplicates: [],\n        message: 'No perceptual hash available'\n      }\n    });\n    continue;\n  }\n  \n  // Check for similar photos\n  // Note: This would typically be done via the backend API\n  // For now, we'll use the similar photos endpoint\n  results.push({\n    json: {\n      ...item.json,\n      checkSimilarUrl: `${backendUrl}/api/photos/${photoId}/similar?maxDistance=5&limit=10`\n    }\n  });\n}\n\nreturn results;"
+      },
+      "id": "prepare-similar-check",
+      "name": "Prepare Similar Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.checkSimilarUrl }}",
+        "options": {}
+      },
+      "id": "check-similar",
+      "name": "Check Similar Photos",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const similarPhotos = item.json.similarPhotos || [];\n  const photoId = item.json.photoId;\n  \n  if (similarPhotos.length === 0) {\n    results.push({\n      json: {\n        ...item.json,\n        duplicates: [],\n        isDuplicate: false,\n        message: 'No duplicates found'\n      }\n    });\n    continue;\n  }\n  \n  // Mark as duplicate if similar photos found\n  results.push({\n    json: {\n      ...item.json,\n      duplicates: similarPhotos,\n      isDuplicate: true,\n      duplicateCount: similarPhotos.length,\n      message: `Found ${similarPhotos.length} similar photo(s)`\n    }\n  });\n}\n\nreturn results;"
+      },
+      "id": "process-duplicates",
+      "name": "Process Duplicates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 300]
+    }
+  ],
+  "connections": {
+    "Webhook - Photo Uploaded": {
+      "main": [
+        [
+          {
+            "node": "Set Variables",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Variables": {
+      "main": [
+        [
+          {
+            "node": "Fetch Photo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Photo": {
+      "main": [
+        [
+          {
+            "node": "Prepare Similar Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Similar Check": {
+      "main": [
+        [
+          {
+            "node": "Check Similar Photos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Similar Photos": {
+      "main": [
+        [
+          {
+            "node": "Process Duplicates",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Duplicates": {
+      "main": [
+        [
+          {
+            "node": "Send Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "versionId": "1"
+}

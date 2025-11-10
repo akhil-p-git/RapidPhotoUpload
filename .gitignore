@@ -1,0 +1,83 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Testing
+coverage/
+*.lcov
+
+# Production builds
+dist/
+build/
+.next/
+out/
+target/
+
+# Environment files
+.env
+.env*.local
+.env.production
+.env.development
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Turbo
+.turbo/
+
+# Docker
+*.pid
+*.seed
+*.pid.lock
+
+# Misc
+.cache/
+temp/
+tmp/
+
+# Java/Spring Boot
+*.class
+*.jar
+*.war
+*.ear
+.gradle/
+build/
+!gradle-wrapper.jar
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+# React Native
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+web-build/
+ios/Pods/
+android/.gradle
+android/app/build
+
+# n8n
+apps/n8n/.n8n/
+apps/n8n/database.sqlite
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.so

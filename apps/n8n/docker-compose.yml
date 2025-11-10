@@ -1,0 +1,186 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database (shared with backend)
+  postgres:
+    image: postgres:16-alpine
+    container_name: rapidphoto-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: rapidphotoupload
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - '54321:5432'  # Using 54321 to avoid conflicts
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - rapidphoto
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: rapidphoto-redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - rapidphoto
+
+  # n8n Workflow Automation
+  n8n:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rapidphoto-n8n
+    restart: unless-stopped
+    environment:
+      # n8n Configuration
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - N8N_HOST=localhost
+
+      # Basic Auth (disable in production, use OAuth)
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=admin
+      - N8N_BASIC_AUTH_PASSWORD=rapidphoto123
+
+      # Database Configuration (PostgreSQL)
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432  # Internal port (container to container)
+      - DB_POSTGRESDB_DATABASE=rapidphotoupload
+      - DB_POSTGRESDB_USER=postgres
+      - DB_POSTGRESDB_PASSWORD=postgres
+      - DB_POSTGRESDB_SCHEMA=n8n
+
+      # Execution
+      - EXECUTIONS_PROCESS=main
+      - EXECUTIONS_DATA_SAVE_ON_ERROR=all
+      - EXECUTIONS_DATA_SAVE_ON_SUCCESS=all
+      - EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS=true
+
+      # Security
+      - N8N_ENCRYPTION_KEY=your-encryption-key-change-in-production
+
+      # Timezone
+      - GENERIC_TIMEZONE=America/New_York
+      - TZ=America/New_York
+
+      # Performance
+      - N8N_CONCURRENCY_PRODUCTION_LIMIT=10
+
+      # Database (for workflows)
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=rapidphotoupload
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+
+      # AI Services (choose one or more)
+      - GOOGLE_VISION_API_KEY=
+      - AWS_ACCESS_KEY_ID=
+      - AWS_SECRET_ACCESS_KEY=
+      - AWS_REGION=us-east-1
+      - AZURE_COMPUTER_VISION_ENDPOINT=
+      - AZURE_COMPUTER_VISION_KEY=
+
+      # Storage
+      - AWS_S3_BUCKET=rapidphotoupload-media
+      - AWS_S3_ENDPOINT=http://minio:9000
+      - LOCAL_STORAGE_PATH=/app/storage
+
+      # Backend Webhook
+      - BACKEND_WEBHOOK_URL=http://host.docker.internal:8080/api/webhooks/processing-complete
+
+    ports:
+      - '5678:5678'
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./workflows:/home/node/.n8n/workflows
+      - ./credentials:/home/node/.n8n/credentials
+      - ./custom-nodes:/home/node/.n8n/custom
+      - ./storage:/app/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - rapidphoto
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:5678/healthz']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # MinIO (S3-compatible local storage for development)
+  minio:
+    image: minio/minio:latest
+    container_name: rapidphoto-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    ports:
+      - '9000:9000'  # API
+      - '9001:9001'  # Console
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:9000/minio/health/live']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - rapidphoto
+
+  # pgAdmin (PostgreSQL Admin UI - optional)
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: rapidphoto-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@rapidphoto.local
+      PGADMIN_DEFAULT_PASSWORD: admin123
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - '5050:80'
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - postgres
+    networks:
+      - rapidphoto
+    profiles:
+      - tools  # Only start with: docker-compose --profile tools up
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  n8n_data:
+    driver: local
+  minio_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+
+networks:
+  rapidphoto:
+    driver: bridge
