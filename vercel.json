@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "buildCommand": "cd apps/web && pnpm install && pnpm build",
+  "buildCommand": "cd apps/web && pnpm install && vite build",
   "outputDirectory": "apps/web/dist",
   "devCommand": "cd apps/web && pnpm dev",
   "installCommand": "pnpm install",
