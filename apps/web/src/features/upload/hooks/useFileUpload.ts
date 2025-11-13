@@ -5,7 +5,7 @@ import { useWebSocket } from './useWebSocket';
 import { needsChunking, generateThumbnail, isValidImageFile, isDuplicateFile, formatFileSize } from '../../../utils/fileUtils';
 import { UploadProgress } from '../../../types/upload.types';
 
-const MAX_CONCURRENT_UPLOADS = 100; // Increased for bulk uploads
+const MAX_CONCURRENT_UPLOADS = 150; // Optimized for 1000+ image bulk uploads
 let taskIdCounter = 0;
 
 export type UploadStatus = 'pending' | 'uploading' | 'processing' | 'completed' | 'failed' | 'paused' | 'cancelled';
@@ -301,46 +301,81 @@ export const useFileUpload = () => {
   const addFiles = useCallback(
     async (files: File[]) => {
       const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
+      const STORAGE_QUOTA = 10 * 1024 * 1024 * 1024; // 10GB
       const rejectedFiles: Array<{ file: File; reason: string }> = [];
-      
+
+      // Calculate current storage usage
+      const currentStorageUsed = uploadQueue
+        .filter((task) => task.status === 'completed')
+        .reduce((sum, task) => sum + task.totalBytes, 0);
+
+      // Calculate pending upload size
+      const pendingUploadSize = uploadQueue
+        .filter((task) => task.status !== 'completed' && task.status !== 'failed' && task.status !== 'cancelled')
+        .reduce((sum, task) => sum + task.totalBytes, 0);
+
+      // Calculate total size of new files
+      const newFilesSize = files.reduce((sum, file) => sum + file.size, 0);
+
+      // Check if adding these files would exceed storage quota
+      const totalAfterUpload = currentStorageUsed + pendingUploadSize + newFilesSize;
+      if (totalAfterUpload > STORAGE_QUOTA) {
+        const availableSpace = STORAGE_QUOTA - (currentStorageUsed + pendingUploadSize);
+        console.warn(`Storage quota exceeded. Available: ${formatFileSize(availableSpace)}, Requested: ${formatFileSize(newFilesSize)}`);
+
+        // Reject all files if they would exceed quota
+        files.forEach((file) => {
+          rejectedFiles.push({
+            file,
+            reason: `Storage quota exceeded. ${formatFileSize(availableSpace)} available of ${formatFileSize(STORAGE_QUOTA)} total.`
+          });
+        });
+
+        return {
+          valid: 0,
+          rejected: rejectedFiles.length,
+          rejectedFiles,
+        };
+      }
+
       const validFiles = files.filter((file) => {
         // Check file type
         if (!isValidImageFile(file)) {
-          rejectedFiles.push({ 
-            file, 
-            reason: `Invalid file type: ${file.type || 'unknown'}. Only image files are allowed.` 
+          rejectedFiles.push({
+            file,
+            reason: `Invalid file type: ${file.type || 'unknown'}. Only image files are allowed.`
           });
           return false;
         }
-        
+
         // Check file size
         if (file.size > MAX_FILE_SIZE) {
-          rejectedFiles.push({ 
-            file, 
-            reason: `File too large: ${formatFileSize(file.size)}. Maximum size is ${formatFileSize(MAX_FILE_SIZE)}.` 
+          rejectedFiles.push({
+            file,
+            reason: `File too large: ${formatFileSize(file.size)}. Maximum size is ${formatFileSize(MAX_FILE_SIZE)}.`
           });
           return false;
         }
-        
+
         // Check for empty files
         if (file.size === 0) {
-          rejectedFiles.push({ 
-            file, 
-            reason: 'File is empty.' 
+          rejectedFiles.push({
+            file,
+            reason: 'File is empty.'
           });
           return false;
         }
-        
+
         // Check for duplicates
         const isDuplicate = uploadQueue.some((task) => isDuplicateFile(task.file, file));
         if (isDuplicate) {
-          rejectedFiles.push({ 
-            file, 
-            reason: 'Duplicate file. This file is already in the upload queue.' 
+          rejectedFiles.push({
+            file,
+            reason: 'Duplicate file. This file is already in the upload queue.'
           });
           return false;
         }
-        
+
         return true;
       });
 

@@ -31,9 +31,15 @@ spring:
 
 server:
   port: ${SERVER_PORT:8080}
+  http2:
+    enabled: true  # Enable HTTP/2 for better performance
   compression:
     enabled: true
     mime-types: application/json,application/xml,text/html,text/xml,text/plain,image/jpeg,image/png,image/gif
+  tomcat:
+    threads:
+      max: 300  # Support high concurrency in development
+      min-spare: 20
 
 # n8n Integration
 n8n:
@@ -60,7 +66,7 @@ upload:
   thread-pool:
     core-size: ${UPLOAD_CORE_SIZE:20}
     max-size: ${UPLOAD_MAX_SIZE:100}
-    queue-capacity: ${UPLOAD_QUEUE_CAPACITY:500}
+    queue-capacity: ${UPLOAD_QUEUE_CAPACITY:1000}  # Increased from 500 for bulk uploads
   chunk-size: ${UPLOAD_CHUNK_SIZE:5242880}
 
 # JWT Configuration
@@ -74,7 +80,7 @@ rate-limit:
     capacity: 100
     refill-interval: 60  # seconds
   upload:
-    capacity: 200
+    capacity: 1000  # Aggressive mode: 1000 req/min for ultra-fast bulk uploads
     refill-interval: 60  # seconds
 
 # Management & Monitoring

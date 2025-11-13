@@ -8,8 +8,8 @@ spring:
     password: ${DATABASE_PASSWORD}
     driver-class-name: org.postgresql.Driver
     hikari:
-      maximum-pool-size: 20
-      minimum-idle: 5
+      maximum-pool-size: 50  # Increased from 20 for 1000 image uploads
+      minimum-idle: 10  # Increased from 5
       connection-timeout: 30000
       idle-timeout: 600000
       max-lifetime: 1800000
@@ -46,9 +46,17 @@ spring:
 
 server:
   port: ${SERVER_PORT:8080}
+  http2:
+    enabled: true  # Enable HTTP/2 for better performance with parallel uploads
   compression:
     enabled: true
     mime-types: application/json,application/xml,text/html,text/xml,text/plain,image/jpeg,image/png,image/gif
+  tomcat:
+    threads:
+      max: 400  # Increased from default 200 for high concurrency
+      min-spare: 50
+    max-connections: 10000  # Support many concurrent connections
+    accept-count: 200  # Queue for incoming connections
   error:
     include-message: never
     include-stacktrace: never
@@ -78,13 +86,22 @@ upload:
   thread-pool:
     core-size: ${UPLOAD_CORE_SIZE:50}
     max-size: ${UPLOAD_MAX_SIZE:200}
-    queue-capacity: ${UPLOAD_QUEUE_CAPACITY:1000}
+    queue-capacity: ${UPLOAD_QUEUE_CAPACITY:2000}  # Increased from 1000 for bulk uploads
   chunk-size: ${UPLOAD_CHUNK_SIZE:5242880}
 
 # JWT Configuration
 jwt:
   secret: ${JWT_SECRET}
   expiration: ${JWT_EXPIRATION:86400000}
+
+# Rate Limiting Configuration (Aggressive mode for production)
+rate-limit:
+  default:
+    capacity: 100
+    refill-interval: 60  # seconds
+  upload:
+    capacity: ${RATE_LIMIT_UPLOAD_CAPACITY:1000}  # 1000 req/min for ultra-fast bulk uploads
+    refill-interval: 60  # seconds
 
 # Logging
 logging:
@@ -107,8 +124,21 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics
+        include: health,info,metrics,prometheus
   endpoint:
     health:
       show-details: when-authorized
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+    tags:
+      application: ${spring.application.name}
+  # Enable HikariCP metrics for connection pool monitoring
+  health:
+    db:
+      enabled: true
+  # Enable thread pool metrics
+  server:
+    max-http-header-size: 8KB
 

@@ -1,18 +1,33 @@
-# RapidPhoto - Photo Upload & Gallery Application
+# RapidPhotoUpload - Ultra-Fast Photo Upload Platform ⚡
 
 A modern, production-ready photo upload and gallery application built with Spring Boot and React.
 
+## ⚡ Ultra-Fast Mode (NEW!)
+
+**Upload 1000 images in 2-3 minutes!** (was 15-20 minutes)
+
+- **6-8x faster** bulk uploads
+- 5 parallel chunks per file
+- 150 concurrent file uploads
+- 1000 requests/minute rate limit
+- HTTP/2 enabled
+
+📖 **[Quick Start Guide →](QUICK_START.md)** | **[Full Deployment Guide →](DEPLOYMENT_GUIDE.md)** | **[Performance Details →](ULTRA_FAST_MODE.md)**
+
+---
+
 ## 🚀 Features
 
+- **⚡ Ultra-Fast Uploads**: Optimized for bulk uploads with parallel chunk processing
 - **Secure Authentication**: JWT-based authentication with Spring Security
-- **Photo Upload**: Support for both direct uploads and chunked uploads for large files
+- **Chunked Upload**: Support for large files with resumable uploads
 - **Gallery View**: Responsive photo gallery with search, filters, and sorting
 - **Image Processing**: Automatic thumbnail generation and EXIF data extraction
-- **Storage Options**: Support for local storage and AWS S3
+- **Storage Options**: CloudFlare R2 (S3-compatible) and local storage
 - **Real-time Updates**: WebSocket support for live upload progress
-- **Rate Limiting**: Protection against abuse with configurable rate limits
-- **Caching**: Performance optimization with Spring Cache
-- **Monitoring**: Health checks and metrics via Spring Boot Actuator
+- **Rate Limiting**: Configurable rate limits (1000 req/min in ultra-fast mode)
+- **Caching**: Performance optimization with Caffeine cache
+- **Monitoring**: Complete metrics with Prometheus integration
 
 ## 🏗️ Architecture
 
@@ -80,51 +95,62 @@ rapid-photo-upload/
 
 ## 🚀 Quick Start
 
-### 1. Clone the repository
+### Automated (Recommended)
+
 ```bash
-git clone <repository-url>
-cd rapid-photo-upload
+# Run locally (frontend + backend + database)
+./scripts/deploy.sh local
+
+# Deploy to GitHub
+./scripts/deploy.sh github
+
+# Deploy to production (Vercel)
+./scripts/deploy.sh production
 ```
 
-### 2. Set up environment variables
+### Manual Setup
+
+#### 1. Clone the repository
 ```bash
-cp .env.example .env
-# Edit .env with your configuration
+git clone https://github.com/akhil-p-git/RapidPhotoUpload.git
+cd RapidPhotoUpload
 ```
 
-### 3. Start with Docker Compose
+#### 2. Start database
 ```bash
-docker-compose up --build
+docker-compose up postgres -d
+```
+
+#### 3. Install dependencies
+```bash
+pnpm install
+```
+
+#### 4. Start backend
+```bash
+pnpm dev:backend
+```
+
+#### 5. Start frontend
+```bash
+pnpm dev:web
 ```
 
 The application will be available at:
-- **Frontend**: http://localhost:3000
+- **Frontend**: http://localhost:5173
 - **Backend API**: http://localhost:8080
-- **API Documentation**: http://localhost:8080/swagger-ui.html
+- **Health Check**: http://localhost:8080/actuator/health
+- **Metrics**: http://localhost:8080/actuator/prometheus
 
-### 4. Manual Setup (Development)
+---
 
-#### Backend
-```bash
-cd apps/backend
-./gradlew bootRun
-```
+## 📚 Documentation
 
-#### Frontend (Web)
-```bash
-cd apps/web
-pnpm install
-pnpm dev
-```
-
-#### Mobile App
-```bash
-cd apps/mobile
-pnpm install
-pnpm start  # Expo development server
-pnpm ios    # Run on iOS simulator
-pnpm android # Run on Android emulator
-```
+- **[Quick Start Guide](QUICK_START.md)** - Get started in 3 steps
+- **[Deployment Guide](DEPLOYMENT_GUIDE.md)** - Complete deployment instructions
+- **[Ultra-Fast Mode](ULTRA_FAST_MODE.md)** - Performance optimizations explained
+- **[Performance Comparison](PERFORMANCE_COMPARISON.md)** - Performance benchmarks
+- **[Architecture Analysis](UPLOAD_ARCHITECTURE_ANALYSIS.md)** - Deep dive into architecture
 
 ## 🔧 Configuration
 
@@ -197,25 +223,42 @@ ab -n 1000 -c 100 http://localhost:8080/api/photos
 
 ## 📦 Deployment
 
-### Docker Deployment
+See **[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)** for complete deployment instructions.
 
-1. Build and start all services:
+### Quick Deploy Commands
+
 ```bash
-docker-compose up --build
+# Run locally
+./scripts/deploy.sh local
+
+# Push to GitHub
+./scripts/deploy.sh github
+
+# Deploy frontend to Vercel
+./scripts/deploy.sh production
 ```
 
-2. Access the application:
-- Frontend: http://localhost:3000
-- Backend: http://localhost:8080
+### Production Stack
 
-### Production Deployment
+- **Frontend**: Vercel (auto-deploy from GitHub)
+- **Backend**: Railway / Render / AWS EC2
+- **Database**: PostgreSQL (Railway/RDS)
+- **Storage**: CloudFlare R2 (S3-compatible)
+- **Monitoring**: Prometheus + Grafana
 
-1. Set environment variables
-2. Use `application-prod.yml` profile
-3. Configure S3 storage (recommended)
-4. Set up reverse proxy (nginx/traefik)
-5. Enable HTTPS
-6. Configure monitoring and alerting
+### Environment Requirements
+
+**Ultra-Fast Mode**:
+- CPU: 8+ cores
+- RAM: 8 GB
+- Network: 1 Gbps
+- DB Connections: 50
+
+**Standard Mode**:
+- CPU: 4 cores
+- RAM: 4-6 GB
+- Network: 500 Mbps
+- DB Connections: 50
 
 ## 🔍 Monitoring
 

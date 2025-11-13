@@ -1,0 +1,377 @@
+===========================================
+RAPIDPHOTOUPLOAD - COMPLETE UPLOAD FLOW
+===========================================
+
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                                   FRONTEND (React/TypeScript)                        │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+
+┌────────────────────────────┐
+│  1. FILE SELECTION         │
+│  ├─ Validate file type     │
+│  ├─ Check size < 100MB     │
+│  ├─ Detect duplicates      │
+│  └─ Generate thumbnail     │
+└─────────────┬──────────────┘
+              │
+              ▼
+┌────────────────────────────┐
+│  2. DECISION TREE          │
+│  if (size < 5MB)           │
+│    → Direct Upload         │
+│  else                      │
+│    → Chunked Upload        │
+└─────────────┬──────────────┘
+              │
+     ┌────────┴────────┐
+     │                 │
+     ▼                 ▼
+┌──────────┐    ┌──────────────────────┐
+│ DIRECT   │    │ CHUNKED UPLOAD       │
+│ UPLOAD   │    │ (file > 5MB)         │
+│ (<5MB)   │    │                      │
+└────┬─────┘    └─────────┬────────────┘
+     │                    │
+     │            POST /api/upload/initialize
+     │                    │
+     │                    ▼
+     │          ┌──────────────────────┐
+     │          │ Calculate Chunks     │
+     │          │ totalChunks =        │
+     │          │ ceil(size / 5MB)     │
+     │          └─────────┬────────────┘
+     │                    │
+     │                    ▼
+     │          ┌──────────────────────┐
+     │          │ Upload Chunks        │
+     │          │ Sequential Upload:   │
+     │          │ for i=0 to total:    │
+     │          │   POST chunk[i]      │
+     │          │   Retry up to 3x     │
+     │          │   Exp backoff        │
+     │          └─────────┬────────────┘
+     │                    │
+     └────────┬───────────┘
+              │
+              ▼
+    ┌─────────────────────────┐
+    │ POST /api/upload        │
+    │ (direct) or             │
+    │ All chunks uploaded     │
+    │ (chunked)               │
+    └──────────┬──────────────┘
+               │
+               │ Upload Speed: ~16.5 MB/s (200 req/min rate-limit)
+               │ Max Parallel: 100 files
+               │
+               └─────────────────────────────────────────────────┐
+                                                                 │
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                          BACKEND (Spring Boot Java)                                 │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+                                                                 │
+                                                                 ▼
+                                        ┌──────────────────────────────────────┐
+                                        │ Authentication (JWT Token)           │
+                                        │ Verify user ID from SecurityContext  │
+                                        └────────────┬─────────────────────────┘
+                                                     │
+                                                     ▼
+                                        ┌──────────────────────────────────────┐
+                                        │ DIRECT UPLOAD (size < 5MB)           │
+                                        │ or                                   │
+                                        │ CHUNKED FINAL (all chunks received)  │
+                                        └────────────┬─────────────────────────┘
+                                                     │
+                                    ┌────────────────┴────────────────┐
+                                    │                                 │
+                            DIRECT UPLOAD                    CHUNKED UPLOAD
+                                    │                                 │
+                                    ▼                                 ▼
+                    ┌───────────────────────────┐    ┌───────────────────────────┐
+                    │ 1. Create Photo Record    │    │ 1. Receive Final Chunk    │
+                    │    (DB: photo table)      │    │                           │
+                    │    Status: CREATED        │    └───────────────┬───────────┘
+                    │    photoId, userId,       │                   │
+                    │    fileName, fileSize     │                   ▼
+                    └───────────────┬───────────┘    ┌───────────────────────────┐
+                                    │                │ 2. Save Chunk Metadata    │
+                                    │                │    (DB: uploadChunk table)│
+                                    │                │    checksum, status       │
+                                    │                └───────────────┬───────────┘
+                                    │                                │
+                                    ▼                                ▼
+                    ┌───────────────────────────┐    ┌───────────────────────────┐
+                    │ 2. Store to R2/S3         │    │ 3. Check if ALL Chunks OK │
+                    │    Path: {userId}/{       │    │    (if totalChunks == OK) │
+                    │    randomUUID}_{filename} │    └───────────────┬───────────┘
+                    │    Streaming upload       │                   │
+                    │    Retry: 4x aggressive  │         ┌─────────┴─────────┐
+                    └───────────────┬───────────┘         │                   │
+                                    │              NO          YES
+                                    │              │            │
+                                    │              │            ▼
+                                    │              │   ┌──────────────────────────┐
+                                    │              │   │ Trigger Async Assembly   │
+                                    │              │   │ @Async("uploadExecutor") │
+                                    │              │   └──────────────┬───────────┘
+                                    │              │                 │
+                                    ▼              ▼                 ▼
+                    ┌───────────────────────────────────────────────────────────┐
+                    │ ASSEMBLY PHASE (Async on uploadExecutor thread)           │
+                    │ ChunkAssemblyService.assembleChunks()                    │
+                    │                                                           │
+                    │ 1. Fetch all chunks from R2/S3                           │
+                    │    Stream: {photoId}/chunks/chunk_0 .. chunk_{n}         │
+                    │    Buffer: 8KB per read                                  │
+                    │                                                           │
+                    │ 2. Write to temp file on server                          │
+                    │                                                           │
+                    │ 3. Upload assembled file to R2/S3                        │
+                    │    Final path: {userId}/{photoId}                        │
+                    │    Retry: 4x aggressive                                  │
+                    │                                                           │
+                    │ 4. Delete individual chunks from R2/S3                   │
+                    │    Clean: {photoId}/chunks/chunk_*                       │
+                    │                                                           │
+                    │ 5. Delete temp file                                      │
+                    │                                                           │
+                    └───────────────────┬──────────────────────────────────────┘
+                                        │
+                                        ▼
+                    ┌───────────────────────────────────────────────────────────┐
+                    │ PROCESSING PHASE                                          │
+                    │                                                           │
+                    │ 1. Extract Metadata (Synchronous)                        │
+                    │    ├─ Image dimensions                                   │
+                    │    ├─ EXIF data                                          │
+                    │    ├─ Color profile                                      │
+                    │    └─ Update DB (photo metadata)                         │
+                    │                                                           │
+                    │ 2. Generate Thumbnails (Async: processingExecutor)       │
+                    │    ├─ Thread pool: CPU count × 2 threads                 │
+                    │    ├─ Multiple sizes (e.g., 200x200, 500x500)            │
+                    │    └─ Store to R2/S3                                     │
+                    │                                                           │
+                    │ 3. Update Status (DB)                                    │
+                    │    └─ Status: PROCESSING → COMPLETED                     │
+                    │                                                           │
+                    └───────────────────┬──────────────────────────────────────┘
+                                        │
+                                        ▼
+                    ┌───────────────────────────────────────────────────────────┐
+                    │ NOTIFICATION PHASE                                        │
+                    │                                                           │
+                    │ 1. Broadcast Progress via WebSocket                      │
+                    │    Notify client: UPLOAD_COMPLETED                       │
+                    │                                                           │
+                    │ 2. Trigger N8N Webhook (Async: webhookExecutor)          │
+                    │    POST http://n8n:5678/webhook/photo-uploaded           │
+                    │    Payload: photoId, userId, metadata                    │
+                    │    Used for: AI tagging, further processing              │
+                    │                                                           │
+                    └───────────────────┬──────────────────────────────────────┘
+                                        │
+                                        ▼
+                    ┌───────────────────────────────────────────────────────────┐
+                    │ RESPONSE TO CLIENT                                        │
+                    │ ├─ PhotoId                                               │
+                    │ ├─ Storage URL                                           │
+                    │ ├─ Status: SUCCESS                                       │
+                    │ └─ Storage type: S3                                      │
+                    └───────────────────────────────────────────────────────────┘
+
+
+===========================================
+CONCURRENCY ARCHITECTURE
+===========================================
+
+FRONTEND:
+┌─────────────────────────────────────┐
+│ Upload Queue (React State)          │
+│ MAX_CONCURRENT_UPLOADS: 100         │
+│                                     │
+│ useEffect monitors:                 │
+│  - pendingTasks                     │
+│  - activeUploads                    │
+│  - availableSlots                   │
+│                                     │
+│ Per File:                           │
+│  - AbortController (for cancel)    │
+│  - Progress update every 1s         │
+│  - Retry up to 3x per chunk        │
+└─────────────────────────────────────┘
+
+BACKEND THREAD POOLS:
+
+┌──────────────────────────────────────────────────────────────────┐
+│ uploadExecutor (Chunk Assembly & File Operations)                │
+├──────────────────────────────────────────────────────────────────┤
+│ Development: 20-100 threads (queue: 500)                         │
+│ Production:  50-200 threads (queue: 1000)                        │
+│ Policy: CallerRunsPolicy (if queue full, caller thread runs it)  │
+│ Shutdown: 120s graceful                                          │
+└──────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────┐
+│ processingExecutor (Image Processing - Thumbnails, Metadata)     │
+├──────────────────────────────────────────────────────────────────┤
+│ Core: CPU count threads                                          │
+│ Max:  CPU count × 2 threads                                      │
+│ Queue: 200 tasks                                                 │
+│ Policy: CallerRunsPolicy                                         │
+│ Shutdown: 180s graceful                                          │
+└──────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────┐
+│ webhookExecutor (N8N Notifications)                              │
+├──────────────────────────────────────────────────────────────────┤
+│ Core: 5 threads                                                  │
+│ Max:  20 threads                                                 │
+│ Queue: 100 tasks                                                 │
+│ Policy: AbortPolicy (throw if queue full)                        │
+│ Shutdown: 30s graceful                                           │
+└──────────────────────────────────────────────────────────────────┘
+
+DATABASE CONNECTION POOL (HikariCP):
+┌──────────────────────────────────────────────────────────────────┐
+│ Max Connections: 20 (production)                                 │
+│ Min Idle: 5                                                      │
+│ Connection Timeout: 30 seconds                                   │
+│ Idle Timeout: 10 minutes                                         │
+│ Max Lifetime: 30 minutes                                         │
+│                                                                  │
+│ Risk: 20 connections with 200 upload threads can cause           │
+│       connection starvation during burst uploads                  │
+└──────────────────────────────────────────────────────────────────┘
+
+
+===========================================
+RATE LIMITING
+===========================================
+
+Bucket4j Implementation:
+
+┌─────────────────────────────────┐
+│ General API Endpoints           │
+│ Rate: 100 requests/minute       │
+│ Per: User ID or IP              │
+│ Bucket Cache Size: 10,000       │
+│ TTL: 1 hour expiration          │
+└─────────────────────────────────┘
+
+┌─────────────────────────────────┐
+│ Upload API Endpoints            │
+│ Rate: 200 requests/minute       │
+│ Per: User ID or IP              │
+│ Rationale: Allow bulk uploads   │
+│ (100 files × 2 chunks = 200)    │
+└─────────────────────────────────┘
+
+
+===========================================
+STORAGE ARCHITECTURE (R2/S3)
+===========================================
+
+CloudFlare R2 Setup:
+  ├─ Endpoint: https://{account}.r2.cloudflarestorage.com
+  ├─ Bucket: rapid-photo
+  ├─ Region: auto (for R2)
+  └─ Credentials: Access Key + Secret Key
+
+Storage Paths:
+  
+  Direct Upload:
+    s3://rapid-photo/{userId}/{UUID}_{filename}
+  
+  Chunked Upload:
+    Chunks (temp):    s3://rapid-photo/{photoId}/chunks/chunk_{n}
+    Final (permanent): s3://rapid-photo/{userId}/{photoId}
+
+Retry Strategy (ExponentialBackoffRetryService):
+  ├─ Aggressive Policy
+  ├─ Max Attempts: 4
+  ├─ Initial Delay: 100ms
+  ├─ Max Delay: 32 seconds
+  ├─ Backoff: 2x exponential
+  │
+  └─ Delays: 0ms, 100ms, 200ms, 400ms
+
+Operations:
+  ├─ Store: Stream upload (no in-memory buffering)
+  ├─ Retrieve: Stream download for chunk assembly
+  ├─ Delete: Cleanup chunks after assembly
+  └─ Pre-signed URLs: Available but not implemented
+
+
+===========================================
+RETRY STRATEGY
+===========================================
+
+FRONTEND (useChunkedUpload.ts):
+  Per Chunk:
+    Max Retries: 3
+    Base Delay: 1000ms
+    Strategy: Exponential backoff
+    
+    Attempt:  Delay:
+      1       0ms (immediate)
+      2       1000ms (1 second)
+      3       2000ms (2 seconds)
+      4       4000ms (4 seconds)
+      
+    After 4 attempts: Chunk upload fails
+                      User shown error
+                      Can retry manually
+
+BACKEND (ExponentialBackoffRetryService):
+  Assembly & S3:
+    Max Retries: 4
+    Base Delay: 100ms
+    Strategy: Exponential backoff
+    
+    Attempt:  Delay:
+      1       0ms (immediate)
+      2       100ms
+      3       200ms
+      4       400ms
+      
+    After 4 attempts: Operation fails
+                      Photo marked as FAILED
+                      N8N webhook notified
+
+
+===========================================
+DATABASE WRITE PATTERNS
+===========================================
+
+Direct Upload:
+  ├─ Write 1: Create Photo record (status: CREATED)
+  ├─ Store to R2/S3
+  ├─ Write 2: Mark as PROCESSING (metadata extraction)
+  ├─ Process metadata + thumbnails
+  └─ Write 3: Mark as COMPLETED
+
+Chunked Upload:
+  ├─ Write 1: Create Photo record (status: CREATED)
+  ├─ Per Chunk:
+  │  └─ Write N: Save UploadChunk metadata + check if all uploaded
+  ├─ Assembly (Async):
+  │  ├─ Store to R2/S3
+  │  └─ Write: Update Photo status → PROCESSING
+  ├─ Process metadata + thumbnails
+  └─ Write: Update Photo status → COMPLETED
+
+Optimization:
+  ├─ Hibernate Batch Size: 20
+  ├─ Order Inserts: true
+  ├─ Order Updates: true
+  └─ Transactions: @Transactional per method
+
+Progress Tracking:
+  ├─ In-Memory: ConcurrentHashMap (NOT persisted)
+  ├─ WebSocket: Real-time updates to clients
+  ├─ Lost on: Server restart
+  └─ Used for: Client-side progress bar + ETA calculation
+
+

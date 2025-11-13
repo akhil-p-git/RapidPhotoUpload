@@ -5,6 +5,7 @@ import { ChunkUploadResponse } from '../../../types/upload.types';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000; // 1 second base delay
+const PARALLEL_CHUNKS_PER_FILE = 5; // Upload 5 chunks in parallel per file for maximum speed
 
 interface ChunkUploadState {
   photoId: string;
@@ -78,42 +79,69 @@ export const useChunkedUpload = () => {
         return newState;
       });
 
-      // Upload chunks sequentially
-      for (let chunkNumber = 0; chunkNumber < totalChunks; chunkNumber++) {
-        const chunkBlob = processChunk(file, chunkNumber, CHUNK_SIZE);
+      // Upload chunks in parallel (3 at a time) for faster performance
+      let currentChunk = 0;
 
+      while (currentChunk < totalChunks) {
+        // Determine how many chunks to upload in this batch
+        const batchSize = Math.min(PARALLEL_CHUNKS_PER_FILE, totalChunks - currentChunk);
+        const chunkPromises: Promise<{ chunkNumber: number; response: ChunkUploadResponse }>[] = [];
+
+        // Create promises for parallel chunk uploads
+        for (let i = 0; i < batchSize; i++) {
+          const chunkNumber = currentChunk + i;
+          const chunkBlob = processChunk(file, chunkNumber, CHUNK_SIZE);
+
+          const promise = uploadChunkWithRetry(photoId, chunkNumber, totalChunks, chunkBlob)
+            .then((response) => ({ chunkNumber, response }))
+            .catch((error) => {
+              console.error(`Failed to upload chunk ${chunkNumber}:`, error);
+              setUploadState((prev) => {
+                const newState = new Map(prev);
+                const state = newState.get(photoId);
+                if (state) {
+                  state.failedChunks.add(chunkNumber);
+                }
+                return newState;
+              });
+              throw error;
+            });
+
+          chunkPromises.push(promise);
+        }
+
+        // Wait for all chunks in this batch to complete
         try {
-          const response = await uploadChunkWithRetry(photoId, chunkNumber, totalChunks, chunkBlob);
+          const results = await Promise.all(chunkPromises);
 
-          setUploadState((prev) => {
-            const newState = new Map(prev);
-            const state = newState.get(photoId);
-            if (state) {
-              state.uploadedChunks = response.uploadedChunks;
-              state.failedChunks.delete(chunkNumber);
-              if (response.uploadedChunks === totalChunks) {
-                state.isComplete = true;
+          // Update state with all completed chunks
+          results.forEach(({ chunkNumber, response }) => {
+            setUploadState((prev) => {
+              const newState = new Map(prev);
+              const state = newState.get(photoId);
+              if (state) {
+                state.uploadedChunks = response.uploadedChunks;
+                state.failedChunks.delete(chunkNumber);
+                if (response.uploadedChunks === totalChunks) {
+                  state.isComplete = true;
+                }
               }
-            }
-            return newState;
+              return newState;
+            });
           });
 
-          if (onProgress) {
-            const progress = (response.uploadedChunks / totalChunks) * 100;
-            onProgress(photoId, progress, response.uploadedChunks, totalChunks);
+          // Report progress with the latest response
+          if (onProgress && results.length > 0) {
+            const latestResponse = results[results.length - 1].response;
+            const progress = (latestResponse.uploadedChunks / totalChunks) * 100;
+            onProgress(photoId, progress, latestResponse.uploadedChunks, totalChunks);
           }
         } catch (error) {
-          console.error(`Failed to upload chunk ${chunkNumber}:`, error);
-          setUploadState((prev) => {
-            const newState = new Map(prev);
-            const state = newState.get(photoId);
-            if (state) {
-              state.failedChunks.add(chunkNumber);
-            }
-            return newState;
-          });
+          // If any chunk in the batch fails, throw error to stop upload
           throw error;
         }
+
+        currentChunk += batchSize;
       }
 
       return photoId;
