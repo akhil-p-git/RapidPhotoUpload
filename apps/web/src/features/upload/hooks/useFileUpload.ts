@@ -109,15 +109,87 @@ export const useFileUpload = () => {
     progressTimers.current.set(taskId, timer);
   }, []);
 
-  // Direct upload (for files < 5MB)
+  // Direct upload to R2 using presigned URL (bypasses backend)
   const uploadFileDirect = useCallback(
     async (task: UploadTask, abortController: AbortController): Promise<void> => {
       try {
-        const response = await uploadApi.uploadPhoto(task.file);
+        // Step 1: Get presigned URL from backend
+        const { photoId, uploadUrl } = await uploadApi.generatePresignedUrl(
+          task.file.name,
+          task.file.type,
+          task.file.size
+        );
         
         if (abortController.signal.aborted) {
           return;
         }
+
+        setUploadQueue((prev) =>
+          prev.map((t) =>
+            t.id === task.id
+              ? {
+                  ...t,
+                  photoId,
+                  progress: 0,
+                }
+              : t
+          )
+        );
+
+        // Step 2: Upload directly to R2 using presigned URL
+        // Track upload progress using XMLHttpRequest for progress events
+        await new Promise<void>((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+
+          xhr.upload.addEventListener('progress', (e) => {
+            if (e.lengthComputable && !abortController.signal.aborted) {
+              const progress = (e.loaded / e.total) * 100;
+              setUploadQueue((prev) =>
+                prev.map((t) =>
+                  t.id === task.id
+                    ? {
+                        ...t,
+                        progress,
+                        uploadedBytes: e.loaded,
+                        totalBytes: e.total,
+                      }
+                    : t
+                )
+              );
+            }
+          });
+
+          xhr.addEventListener('load', () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              resolve();
+            } else {
+              reject(new Error(`R2 upload failed: ${xhr.status} ${xhr.statusText}`));
+            }
+          });
+
+          xhr.addEventListener('error', () => {
+            reject(new Error('R2 upload failed: network error'));
+          });
+
+          xhr.addEventListener('abort', () => {
+            reject(new Error('Upload aborted'));
+          });
+
+          abortController.signal.addEventListener('abort', () => {
+            xhr.abort();
+          });
+
+          xhr.open('PUT', uploadUrl);
+          xhr.setRequestHeader('Content-Type', task.file.type);
+          xhr.send(task.file);
+        });
+
+        if (abortController.signal.aborted) {
+          return;
+        }
+
+        // Step 3: Notify backend that upload is complete
+        const response = await uploadApi.completeUpload(photoId);
 
         setUploadQueue((prev) =>
           prev.map((t) =>
@@ -301,42 +373,10 @@ export const useFileUpload = () => {
   const addFiles = useCallback(
     async (files: File[]) => {
       const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
-      const STORAGE_QUOTA = 10 * 1024 * 1024 * 1024; // 10GB
       const rejectedFiles: Array<{ file: File; reason: string }> = [];
 
-      // Calculate current storage usage
-      const currentStorageUsed = uploadQueue
-        .filter((task) => task.status === 'completed')
-        .reduce((sum, task) => sum + task.totalBytes, 0);
-
-      // Calculate pending upload size
-      const pendingUploadSize = uploadQueue
-        .filter((task) => task.status !== 'completed' && task.status !== 'failed' && task.status !== 'cancelled')
-        .reduce((sum, task) => sum + task.totalBytes, 0);
-
-      // Calculate total size of new files
-      const newFilesSize = files.reduce((sum, file) => sum + file.size, 0);
-
-      // Check if adding these files would exceed storage quota
-      const totalAfterUpload = currentStorageUsed + pendingUploadSize + newFilesSize;
-      if (totalAfterUpload > STORAGE_QUOTA) {
-        const availableSpace = STORAGE_QUOTA - (currentStorageUsed + pendingUploadSize);
-        console.warn(`Storage quota exceeded. Available: ${formatFileSize(availableSpace)}, Requested: ${formatFileSize(newFilesSize)}`);
-
-        // Reject all files if they would exceed quota
-        files.forEach((file) => {
-          rejectedFiles.push({
-            file,
-            reason: `Storage quota exceeded. ${formatFileSize(availableSpace)} available of ${formatFileSize(STORAGE_QUOTA)} total.`
-          });
-        });
-
-        return {
-          valid: 0,
-          rejected: rejectedFiles.length,
-          rejectedFiles,
-        };
-      }
+      // Note: Storage quota check is handled by the backend
+      // Frontend only validates file size and type
 
       const validFiles = files.filter((file) => {
         // Check file type

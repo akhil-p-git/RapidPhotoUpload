@@ -121,6 +121,66 @@ public class UploadController {
     }
 
     /**
+     * Generate presigned URL for direct R2/S3 upload
+     * Client uploads directly to R2, bypassing backend
+     */
+    @PostMapping("/presigned")
+    public ResponseEntity<PresignedUploadResponse> generatePresignedUrl(
+            @Valid @RequestBody PresignedUploadRequest request) {
+        
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || !authentication.isAuthenticated()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        
+        UUID userId = UUID.fromString(authentication.getName());
+        
+        logger.info("Presigned URL request: userId={}, fileName={}, size={}", 
+            userId, request.getOriginalFileName(), request.getFileSizeBytes());
+
+        try {
+            PresignedUploadResponse response = uploadService.generatePresignedUploadUrl(userId, request);
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            logger.error("Failed to generate presigned URL", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
+
+    /**
+     * Complete upload after client has uploaded directly to R2
+     * This triggers metadata extraction and thumbnail generation
+     */
+    @PostMapping("/complete")
+    public ResponseEntity<UploadPhotoResponse> completeUpload(
+            @Valid @RequestBody CompleteUploadRequest request) {
+        
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || !authentication.isAuthenticated()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        
+        UUID userId = UUID.fromString(authentication.getName());
+        
+        logger.info("Complete upload request: userId={}, photoId={}", userId, request.getPhotoId());
+
+        try {
+            UploadPhotoResponse response = uploadService.completeDirectUpload(userId, request.getPhotoId());
+            return ResponseEntity.ok(response);
+        } catch (IllegalArgumentException e) {
+            logger.warn("Invalid complete upload request: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(
+                new UploadPhotoResponse(null, null, "ERROR", e.getMessage())
+            );
+        } catch (Exception e) {
+            logger.error("Failed to complete upload", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(
+                new UploadPhotoResponse(null, null, "ERROR", "Failed to complete upload: " + e.getMessage())
+            );
+        }
+    }
+
+    /**
      * Health check endpoint
      */
     @GetMapping("/health")

@@ -1,6 +1,7 @@
 package com.rapidphoto.infrastructure.storage;
 
 import java.io.InputStream;
+import java.time.Duration;
 
 public interface StorageService {
     
@@ -38,5 +39,15 @@ public interface StorageService {
      * Get storage type identifier
      */
     String getStorageType();
+    
+    /**
+     * Generate presigned URL for direct client upload
+     * @param path Storage path (key)
+     * @param duration URL expiration duration
+     * @return Presigned URL for PUT operation
+     */
+    default String generatePresignedUploadUrl(String path, Duration duration) {
+        throw new UnsupportedOperationException("Presigned URLs not supported for " + getStorageType());
+    }
 }
 

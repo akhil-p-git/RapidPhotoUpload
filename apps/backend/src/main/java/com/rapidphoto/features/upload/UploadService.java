@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.UUID;
 
 @Service
@@ -170,6 +171,83 @@ public class UploadService {
             "/api/upload/" + photoId + "/chunk",
             "INITIALIZED",
             "Upload session created. Ready to receive chunks."
+        );
+    }
+
+    /**
+     * Generate presigned URL for direct R2/S3 upload
+     * Client will upload directly to R2, bypassing backend
+     */
+    public PresignedUploadResponse generatePresignedUploadUrl(UUID userId, PresignedUploadRequest request) {
+        // Create photo record in database
+        String fileName = UUID.randomUUID().toString() + "_" + request.getOriginalFileName();
+        String storagePath = userId.toString() + "/" + fileName;
+        
+        StartPhotoUploadCommand command = new StartPhotoUploadCommand(
+            userId,
+            fileName,
+            request.getOriginalFileName(),
+            request.getFileSizeBytes(),
+            request.getMimeType()
+        );
+
+        UUID photoId = uploadCommandHandler.handle(command);
+
+        // Generate presigned URL (valid for 1 hour)
+        String presignedUrl = storageService.generatePresignedUploadUrl(
+            storagePath,
+            Duration.ofHours(1)
+        );
+
+        logger.info("Generated presigned URL: photoId={}, userId={}, path={}", 
+            photoId, userId, storagePath);
+
+        return new PresignedUploadResponse(
+            photoId,
+            presignedUrl,
+            storagePath,
+            "Presigned URL generated. Upload directly to R2."
+        );
+    }
+
+    /**
+     * Complete upload after client has uploaded directly to R2
+     * This processes the photo (metadata extraction, thumbnails, etc.)
+     */
+    public UploadPhotoResponse completeDirectUpload(UUID userId, UUID photoId) {
+        Photo photo = photoRepository.findById(photoId)
+            .orElseThrow(() -> new IllegalArgumentException("Photo not found: " + photoId));
+
+        // Verify ownership
+        if (!photo.getUserId().getValue().equals(userId)) {
+            throw new IllegalArgumentException("Photo does not belong to user: " + userId);
+        }
+
+        // Mark as processing
+        photo.markAsProcessing();
+        photoRepository.save(photo);
+
+        // Extract metadata synchronously
+        try {
+            metadataExtractor.extractMetadata(photo);
+            logger.info("Extracted metadata for photo: {}", photoId);
+        } catch (Exception e) {
+            logger.warn("Failed to extract metadata for photo: {} - {}", photoId, e.getMessage());
+        }
+
+        // Generate thumbnails asynchronously
+        thumbnailService.generateThumbnails(photo);
+
+        // Mark as completed
+        photo.markAsCompleted();
+        photoRepository.save(photo);
+        logger.info("Completed direct upload: photoId={}, userId={}", photoId, userId);
+
+        return new UploadPhotoResponse(
+            photoId,
+            photo.getStorageInfo().getStoragePath(),
+            "COMPLETED",
+            "Photo uploaded and processed successfully"
         );
     }
 }

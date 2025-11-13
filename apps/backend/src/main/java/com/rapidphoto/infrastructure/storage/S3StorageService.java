@@ -126,6 +126,7 @@ public class S3StorageService implements StorageService {
     /**
      * Generate presigned URL for direct client upload
      */
+    @Override
     public String generatePresignedUploadUrl(String path, Duration duration) {
         try {
             PutObjectRequest putObjectRequest = PutObjectRequest.builder()

@@ -95,6 +95,20 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
     }
 
+    @ExceptionHandler(IllegalStateException.class)
+    public ResponseEntity<ErrorResponse> handleIllegalState(IllegalStateException ex, WebRequest request) {
+        // Check if it's a storage quota error
+        if (ex.getMessage() != null && ex.getMessage().contains("Storage quota exceeded")) {
+            logger.warn("Storage quota exceeded: {}", ex.getMessage());
+            ErrorResponse error = new ErrorResponse(HttpStatus.FORBIDDEN.value(), "Storage quota exceeded", request.getDescription(false));
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error);
+        }
+        // For other IllegalStateException, return 400
+        logger.warn("Illegal state: {}", ex.getMessage());
+        ErrorResponse error = new ErrorResponse(HttpStatus.BAD_REQUEST.value(), ex.getMessage(), request.getDescription(false));
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleGenericError(Exception ex, WebRequest request) {
         logger.error("Unexpected error", ex);

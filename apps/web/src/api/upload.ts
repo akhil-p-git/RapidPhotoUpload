@@ -56,8 +56,52 @@ const retryWithBackoff = async <T>(
 
 export const uploadApi = {
   /**
+   * Generate presigned URL for direct R2 upload
+   */
+  generatePresignedUrl: async (
+    originalFileName: string,
+    mimeType: string,
+    fileSizeBytes: number
+  ): Promise<{ photoId: string; uploadUrl: string; storagePath: string }> => {
+    const response = await apiClient.post('/upload/presigned', {
+      originalFileName,
+      mimeType,
+      fileSizeBytes,
+    });
+    return response.data;
+  },
+
+  /**
+   * Upload file directly to R2 using presigned URL
+   */
+  uploadToR2: async (presignedUrl: string, file: File): Promise<void> => {
+    const response = await fetch(presignedUrl, {
+      method: 'PUT',
+      body: file,
+      headers: {
+        'Content-Type': file.type,
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`R2 upload failed: ${response.status} ${response.statusText}`);
+    }
+  },
+
+  /**
+   * Complete upload after direct R2 upload
+   */
+  completeUpload: async (photoId: string): Promise<UploadResponse> => {
+    const response = await apiClient.post<UploadResponse>('/upload/complete', {
+      photoId,
+    });
+    return response.data;
+  },
+
+  /**
    * Upload a file directly (userId comes from JWT token)
    * Includes retry logic for rate-limited requests
+   * @deprecated Use generatePresignedUrl + uploadToR2 + completeUpload for direct R2 uploads
    */
   uploadPhoto: async (file: File): Promise<UploadResponse> => {
     return retryWithBackoff(async () => {
