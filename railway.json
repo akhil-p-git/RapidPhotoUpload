@@ -5,7 +5,7 @@
     "buildCommand": "cd apps/backend && ./gradlew build -x test"
   },
   "deploy": {
-    "startCommand": "cd apps/backend && java -jar build/libs/backend-1.0.0.jar",
+    "startCommand": "java -jar app.jar",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
   }
