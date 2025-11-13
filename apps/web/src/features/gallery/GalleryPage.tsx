@@ -50,16 +50,20 @@ export const GalleryPage: React.FC = () => {
       setError(null);
       const response = await galleryApi.getPhotos(page, PAGE_SIZE, filters);
 
+      // Safely handle response
+      const content = response?.content || [];
+
       if (append) {
-        setPhotos((prev) => [...prev, ...response.content]);
+        setPhotos((prev) => [...prev, ...content]);
       } else {
-        setPhotos(response.content);
+        setPhotos(content);
       }
 
-      setCurrentPage(response.currentPage);
-      setHasMore(response.hasNext);
+      setCurrentPage(response?.currentPage || 0);
+      setHasMore(response?.hasNext || false);
     } catch (err: any) {
       setError(err.message || 'Failed to load photos');
+      setPhotos([]); // Set empty array on error
     } finally {
       setLoading(false);
     }
