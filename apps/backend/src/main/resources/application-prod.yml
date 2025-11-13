@@ -8,8 +8,8 @@ spring:
     password: ${DATABASE_PASSWORD}
     driver-class-name: org.postgresql.Driver
     hikari:
-      maximum-pool-size: 50  # Increased from 20 for 1000 image uploads
-      minimum-idle: 10  # Increased from 5
+      maximum-pool-size: 100  # Increased for 500 concurrent uploads
+      minimum-idle: 20  # Increased for better connection availability
       connection-timeout: 30000
       idle-timeout: 600000
       max-lifetime: 1800000
@@ -84,9 +84,9 @@ storage:
 # Concurrency Configuration
 upload:
   thread-pool:
-    core-size: ${UPLOAD_CORE_SIZE:50}
-    max-size: ${UPLOAD_MAX_SIZE:200}
-    queue-capacity: ${UPLOAD_QUEUE_CAPACITY:2000}  # Increased from 1000 for bulk uploads
+    core-size: ${UPLOAD_CORE_SIZE:100}
+    max-size: ${UPLOAD_MAX_SIZE:500}  # Increased for 500 concurrent uploads
+    queue-capacity: ${UPLOAD_QUEUE_CAPACITY:5000}  # Increased for 500 concurrent uploads
   chunk-size: ${UPLOAD_CHUNK_SIZE:5242880}
 
 # JWT Configuration
@@ -100,7 +100,7 @@ rate-limit:
     capacity: 100
     refill-interval: 60  # seconds
   upload:
-    capacity: ${RATE_LIMIT_UPLOAD_CAPACITY:1000}  # 1000 req/min for ultra-fast bulk uploads
+    capacity: ${RATE_LIMIT_UPLOAD_CAPACITY:5000}  # 5000 req/min for maximum speed (500 concurrent × 10 chunks)
     refill-interval: 60  # seconds
 
 # Logging

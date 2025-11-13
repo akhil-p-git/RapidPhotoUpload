@@ -5,7 +5,7 @@ import { ChunkUploadResponse } from '../../../types/upload.types';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000; // 1 second base delay
-const PARALLEL_CHUNKS_PER_FILE = 5; // Upload 5 chunks in parallel per file for maximum speed
+const PARALLEL_CHUNKS_PER_FILE = 10; // Upload 10 chunks in parallel per file for ultra-fast speed
 
 interface ChunkUploadState {
   photoId: string;
@@ -79,7 +79,7 @@ export const useChunkedUpload = () => {
         return newState;
       });
 
-      // Upload chunks in parallel (3 at a time) for faster performance
+      // Upload chunks in parallel (10 at a time) for ultra-fast performance
       let currentChunk = 0;
 
       while (currentChunk < totalChunks) {
