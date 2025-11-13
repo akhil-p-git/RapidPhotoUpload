@@ -88,7 +88,28 @@ export const galleryApi = {
     }
     
     const response = await apiClient.get<PhotosPageResponse>(`/photos?${params.toString()}`);
-    return response.data;
+    // Ensure response has valid structure with safe defaults
+    if (response.data && typeof response.data === 'object') {
+      return {
+        content: Array.isArray(response.data.content) ? response.data.content : [],
+        totalElements: response.data.totalElements ?? 0,
+        totalPages: response.data.totalPages ?? 0,
+        currentPage: response.data.currentPage ?? page,
+        size: response.data.size ?? size,
+        hasNext: response.data.hasNext ?? false,
+        hasPrevious: response.data.hasPrevious ?? false,
+      };
+    }
+    // Fallback if response structure is invalid (shouldn't happen, but defensive)
+    return {
+      content: [],
+      totalElements: 0,
+      totalPages: 0,
+      currentPage: page,
+      size: size,
+      hasNext: false,
+      hasPrevious: false,
+    };
   },
 
   /**

@@ -51,10 +51,13 @@ export const GalleryPage: React.FC = () => {
       const response = await galleryApi.getPhotos(page, PAGE_SIZE, filters);
 
       // Safely handle response
-      const content = response?.content || [];
+      const content = Array.isArray(response?.content) ? response.content : [];
 
       if (append) {
-        setPhotos((prev) => [...prev, ...content]);
+        setPhotos((prev) => {
+          const prevArray = Array.isArray(prev) ? prev : [];
+          return [...prevArray, ...content];
+        });
       } else {
         setPhotos(content);
       }
@@ -99,8 +102,9 @@ export const GalleryPage: React.FC = () => {
       openLogin();
       return;
     }
-    const index = photos.findIndex((p) => p.id === photo.id);
-    setSelectedIndex(index);
+    const photosArray = Array.isArray(photos) ? photos : [];
+    const index = photosArray.findIndex((p) => p.id === photo.id);
+    setSelectedIndex(index >= 0 ? index : 0);
     setSelectedPhoto(photo);
   };
 
@@ -109,18 +113,20 @@ export const GalleryPage: React.FC = () => {
   };
 
   const handleNextPhoto = () => {
-    if (selectedIndex < photos.length - 1) {
+    const photosArray = Array.isArray(photos) ? photos : [];
+    if (selectedIndex < photosArray.length - 1) {
       const nextIndex = selectedIndex + 1;
       setSelectedIndex(nextIndex);
-      setSelectedPhoto(photos[nextIndex]);
+      setSelectedPhoto(photosArray[nextIndex]);
     }
   };
 
   const handlePreviousPhoto = () => {
+    const photosArray = Array.isArray(photos) ? photos : [];
     if (selectedIndex > 0) {
       const prevIndex = selectedIndex - 1;
       setSelectedIndex(prevIndex);
-      setSelectedPhoto(photos[prevIndex]);
+      setSelectedPhoto(photosArray[prevIndex]);
     }
   };
 
@@ -226,11 +232,11 @@ export const GalleryPage: React.FC = () => {
               </button>
             </div>
           </div>
-        ) : loading && photos.length === 0 ? (
+        ) : loading && (!photos || photos.length === 0) ? (
           <div className="loading">
             <div className="spinner"></div>
           </div>
-        ) : error && photos.length === 0 ? (
+        ) : error && (!photos || photos.length === 0) ? (
           <div className="empty-state">
             <div>
               <p className="empty-title">Error loading photos</p>
@@ -239,7 +245,7 @@ export const GalleryPage: React.FC = () => {
               </button>
             </div>
           </div>
-        ) : photos.length > 0 ? (
+        ) : photos && photos.length > 0 ? (
           <div className="photo-grid-container">
             <div className="photo-grid">
               {photos.map((photo, index) => (
@@ -286,13 +292,16 @@ export const GalleryPage: React.FC = () => {
       {selectedPhoto && isAuthenticated && (
         <Lightbox
           photo={selectedPhoto}
-          photos={photos}
+          photos={Array.isArray(photos) ? photos : []}
           currentIndex={selectedIndex}
           onClose={handleCloseLightbox}
           onNext={handleNextPhoto}
           onPrevious={handlePreviousPhoto}
           onDelete={() => {
-            setPhotos((prev) => prev.filter((p) => p.id !== selectedPhoto.id));
+            setPhotos((prev) => {
+              const prevArray = Array.isArray(prev) ? prev : [];
+              return prevArray.filter((p) => p.id !== selectedPhoto.id);
+            });
             setSelectedPhoto(null);
             success('Photo deleted');
           }}

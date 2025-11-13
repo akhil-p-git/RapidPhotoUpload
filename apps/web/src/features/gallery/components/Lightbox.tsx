@@ -22,6 +22,8 @@ export const Lightbox: React.FC<LightboxProps> = ({
   onPrevious,
   onDelete,
 }) => {
+  // Ensure photos is always an array
+  const photosArray = Array.isArray(photos) ? photos : [];
   const [isDeleting, setIsDeleting] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   // Handle ESC key
@@ -251,7 +253,7 @@ export const Lightbox: React.FC<LightboxProps> = ({
         </button>
       )}
 
-      {currentIndex < photos.length - 1 && (
+      {currentIndex < photosArray.length - 1 && (
         <button
           onClick={(e) => {
             e.stopPropagation();
@@ -332,7 +334,7 @@ export const Lightbox: React.FC<LightboxProps> = ({
 
           {/* Photo Counter */}
           <div className="text-sm text-gray-400 text-center pt-4 border-t border-gray-700 mt-6">
-            {currentIndex + 1} of {photos.length}
+            {currentIndex + 1} of {photosArray.length}
           </div>
         </div>
       </div>
