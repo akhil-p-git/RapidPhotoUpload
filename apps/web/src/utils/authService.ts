@@ -1,5 +1,6 @@
 const TOKEN_KEY = 'rapidphoto_token';
 const USER_KEY = 'rapidphoto_user';
+const API_URL = import.meta.env.VITE_API_URL || '/api';
 
 export interface User {
   id: string;
@@ -20,7 +21,7 @@ export const authService = {
    * Login with email and password
    */
   login: async (email: string, password: string): Promise<AuthResponse> => {
-    const response = await fetch('http://localhost:8080/api/auth/login', {
+    const response = await fetch(`${API_URL}/auth/login`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -48,7 +49,7 @@ export const authService = {
     password: string,
     fullName?: string
   ): Promise<AuthResponse> => {
-    const response = await fetch('http://localhost:8080/api/auth/register', {
+    const response = await fetch(`${API_URL}/auth/register`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -72,7 +73,7 @@ export const authService = {
    */
   logout: async (): Promise<void> => {
     try {
-      await fetch('http://localhost:8080/api/auth/logout', {
+      await fetch(`${API_URL}/auth/logout`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${authService.getToken()}`,
@@ -95,7 +96,7 @@ export const authService = {
     }
 
     try {
-      const response = await fetch('http://localhost:8080/api/auth/me', {
+      const response = await fetch(`${API_URL}/auth/me`, {
         headers: {
           'Authorization': `Bearer ${token}`,
         },

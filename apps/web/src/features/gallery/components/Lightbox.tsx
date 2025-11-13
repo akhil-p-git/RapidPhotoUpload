@@ -70,9 +70,10 @@ export const Lightbox: React.FC<LightboxProps> = ({
   const [imageLoaded, setImageLoaded] = useState(false);
   const [useLargeImage, setUseLargeImage] = useState(false);
 
-  const mediumImageUrl = `http://localhost:8080/api/photos/${photo.id}/file?size=medium`;
-  const largeImageUrl = `http://localhost:8080/api/photos/${photo.id}/file?size=large`;
-  const originalImageUrl = `http://localhost:8080/api/photos/${photo.id}/file?size=original`;
+  const API_URL = import.meta.env.VITE_API_URL || '/api';
+  const mediumImageUrl = `${API_URL}/photos/${photo.id}/file?size=medium`;
+  const largeImageUrl = `${API_URL}/photos/${photo.id}/file?size=large`;
+  const originalImageUrl = `${API_URL}/photos/${photo.id}/file?size=original`;
 
   const handleDownload = useCallback(() => {
     if (!photo) return;

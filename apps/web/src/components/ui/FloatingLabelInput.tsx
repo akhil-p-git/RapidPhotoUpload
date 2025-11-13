@@ -64,7 +64,8 @@ export const FloatingLabelInput: React.FC<FloatingLabelInputProps> = ({
           ref={inputRef}
           type={inputType}
           value={value}
-          className={`peer w-full px-4 pt-6 pb-2 bg-white dark:bg-gray-800 border rounded-xl transition-all duration-200 focus-visible-ring ${
+          style={{ paddingTop: '25px' }}
+          className={`peer w-full px-4 pb-2 bg-white dark:bg-gray-800 border rounded-xl transition-all duration-200 focus-visible-ring ${
             error
               ? 'border-error-500 focus:border-error-500 focus:ring-error-500'
               : 'border-gray-300 dark:border-gray-600 focus:border-primary-500 focus:ring-primary-500'

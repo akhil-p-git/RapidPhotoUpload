@@ -19,7 +19,8 @@ export const PhotoCard: React.FC<PhotoCardProps> = memo(({
 }) => {
   // Construct thumbnail URL - use thumbnail size for grid view
   // Backend serves at /api/photos/{photoId}/file?size=thumbnail
-  const imageUrl = `http://localhost:8080/api/photos/${photo.id}/file?size=thumbnail`;
+  const API_URL = import.meta.env.VITE_API_URL || '/api';
+  const imageUrl = `${API_URL}/photos/${photo.id}/file?size=thumbnail`;
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageError, setImageError] = useState(false);
   const [isInView, setIsInView] = useState(false);

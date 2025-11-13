@@ -2,7 +2,18 @@ import { useEffect, useRef, useCallback } from 'react';
 import { UploadProgress } from '../../../types/upload.types';
 import { WebSocketService } from '../../../services/websocket';
 
-const WS_URL = 'ws://localhost:8080/ws/upload-progress';
+// Convert HTTP API URL to WebSocket URL
+const getWebSocketUrl = () => {
+  const apiUrl = import.meta.env.VITE_API_URL;
+  if (apiUrl) {
+    // Replace http:// with ws:// and https:// with wss://
+    return apiUrl.replace(/^http/, 'ws') + '/ws/upload-progress';
+  }
+  // Default to relative WebSocket URL (works with proxy)
+  return `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/upload-progress`;
+};
+
+const WS_URL = getWebSocketUrl();
 
 export const useWebSocket = (
   onProgress: (progress: UploadProgress) => void,

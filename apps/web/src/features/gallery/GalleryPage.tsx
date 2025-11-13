@@ -250,7 +250,7 @@ export const GalleryPage: React.FC = () => {
                   className="photo-item"
                 >
                   <img
-                    src={`http://localhost:8080/api/photos/${photo.id}/file?size=medium`}
+                    src={`${import.meta.env.VITE_API_URL || '/api'}/photos/${photo.id}/file?size=medium`}
                     alt={photo.originalFileName}
                   />
                 </div>

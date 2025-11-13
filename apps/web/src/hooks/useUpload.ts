@@ -3,13 +3,22 @@ import { uploadApi } from '../api/upload';
 import { WebSocketService } from '../services/websocket';
 import { UploadProgress, UploadResponse } from '../types/upload.types';
 
+// Convert HTTP API URL to WebSocket URL
+const getWebSocketUrl = (userId: string) => {
+  const apiUrl = import.meta.env.VITE_API_URL;
+  if (apiUrl) {
+    return apiUrl.replace(/^http/, 'ws') + `/ws/upload-progress?userId=${userId}`;
+  }
+  return `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/upload-progress?userId=${userId}`;
+};
+
 export const useUpload = (userId: string) => {
   const [progress, setProgress] = useState<UploadProgress | null>(null);
   const [wsService, setWsService] = useState<WebSocketService | null>(null);
 
   const connectWebSocket = useCallback(() => {
     const ws = new WebSocketService(
-      `ws://localhost:8080/ws/upload-progress?userId=${userId}`,
+      getWebSocketUrl(userId),
       (progress) => {
         setProgress(progress);
       },

@@ -37,7 +37,7 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(({
     <>
       <style>{`
         .input-wrapper { position: relative; }
-        .input-field { width: 100%; padding: 12px 16px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; font-size: 1rem; color: #111827; transition: all 0.2s; }
+        .input-field { width: 100%; padding: 13px 16px 12px 16px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; font-size: 1rem; color: #111827; transition: all 0.2s; }
         .input-field:focus { outline: none; border-color: #111827; background: white; }
         .input-label { position: absolute; left: 16px; transition: all 0.2s; pointer-events: none; color: #6b7280; }
         .input-label-floating { top: 4px; font-size: 0.75rem; }
