@@ -5,7 +5,7 @@ import { useWebSocket } from './useWebSocket';
 import { needsChunking, generateThumbnail, isValidImageFile, isDuplicateFile, formatFileSize } from '../../../utils/fileUtils';
 import { UploadProgress } from '../../../types/upload.types';
 
-const MAX_CONCURRENT_UPLOADS = 250; // LUDICROUS MODE: Maximum possible speed
+const MAX_CONCURRENT_UPLOADS = 500; // ULTRA-FAST MODE: 500 parallel uploads
 let taskIdCounter = 0;
 
 export type UploadStatus = 'pending' | 'uploading' | 'processing' | 'completed' | 'failed' | 'paused' | 'cancelled';
