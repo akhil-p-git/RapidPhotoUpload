@@ -1,6 +1,10 @@
-# RapidPhotoUpload - Ultra-Fast Photo Upload Platform ⚡
+# RapidPhotoUpload ⚡
 
-A modern, production-ready photo upload and gallery application built with Spring Boot and React.
+> Spring Boot + React media platform with resumable chunked uploads, EXIF/thumbnail processing, WebSocket progress, and Cloudflare R2 storage.
+
+**Why I built it:** A client needed to upload large batches of high-resolution photos reliably over flaky field connections. Naive multipart uploads kept failing on retries. RapidPhotoUpload solves it with chunked, parallel uploads (1000 images in 2–3 minutes vs 15–20 with the old flow) plus a searchable gallery and EXIF pipeline.
+
+> 📸 _Screenshot of the gallery + upload progress UI coming soon._
 
 ## ⚡ Ultra-Fast Mode (NEW!)
 
@@ -293,11 +297,11 @@ See `CONTRIBUTING.md` for development guidelines.
 
 ## 📄 License
 
-[Your License Here]
+MIT — see [LICENSE](LICENSE)
 
-## 👥 Authors
+## 👥 Author
 
-[Your Name/Team]
+Built by [Akhil Pinnani](https://github.com/akhil-p-git) · [akhil-p.dev](https://akhil-p.dev)
 
 ## 🙏 Acknowledgments
 
