@@ -175,5 +175,20 @@ export const uploadApi = {
     const response = await apiClient.get(`/upload/progress/${photoId}`);
     return response.data;
   },
+
+  /**
+   * Which chunks the server already holds for a photo.
+   *
+   * Used to resume: the caller sends only the chunks missing from the response.
+   * Throws on 404 (photo gone, or not owned by the caller), which the resume
+   * path treats as "start over" rather than as a failure.
+   */
+  getChunkProgress: async (photoId: string, totalChunks?: number): Promise<ChunkUploadResponse> => {
+    const response = await apiClient.get<ChunkUploadResponse>(
+      `/upload/chunk/progress/${photoId}`,
+      totalChunks ? { params: { totalChunks } } : undefined
+    );
+    return response.data;
+  },
 };
 

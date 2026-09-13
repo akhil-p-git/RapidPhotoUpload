@@ -65,7 +65,13 @@ export const useFileUpload = () => {
   const progressTimers = useRef<Map<string, NodeJS.Timeout>>(new Map());
   const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
   
-  const { uploadFileChunked } = useChunkedUpload();
+  const { uploadFileChunked, clearSessionForFile, pruneStaleSessions } = useChunkedUpload();
+
+  // Discard resume records the server has already collected, so the store does
+  // not accumulate one entry per abandoned upload for the life of the browser.
+  useEffect(() => {
+    pruneStaleSessions().catch(() => {});
+  }, [pruneStaleSessions]);
 
   // WebSocket progress handler
   const handleWebSocketProgress = useCallback((progress: UploadProgress) => {
@@ -582,6 +588,13 @@ export const useFileUpload = () => {
       activeUploadRefs.current.delete(taskId);
     }
 
+    // An explicit cancel means the user does not intend to resume this file.
+    // Leaving the record would silently resume it on the next selection.
+    const cancelled = uploadQueue.find((t) => t.id === taskId);
+    if (cancelled && needsChunking(cancelled.file.size)) {
+      clearSessionForFile(cancelled.file).catch(() => {});
+    }
+
     const timer = progressTimers.current.get(taskId);
     if (timer) {
       clearInterval(timer);
@@ -594,7 +607,7 @@ export const useFileUpload = () => {
       )
     );
     setActiveUploads((prev) => Math.max(0, prev - 1));
-  }, []);
+  }, [uploadQueue, clearSessionForFile]);
 
   // Retry upload
   const retryUpload = useCallback(
