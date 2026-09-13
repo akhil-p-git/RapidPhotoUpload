@@ -8,6 +8,35 @@ import { UploadProgress } from '../../../types/upload.types';
 const MAX_CONCURRENT_UPLOADS = 500; // Maximum speed: 500 parallel uploads for ultra-fast bulk uploads
 let taskIdCounter = 0;
 
+/**
+ * Which path sub-chunk-threshold files take.
+ *
+ *   'presigned' (default) - browser PUTs straight to R2/S3. Current architecture.
+ *   'proxy'               - bytes go through the backend via POST /api/upload.
+ *                           This is what the code did before commit 0f02ef5.
+ *
+ * Files above CHUNK_SIZE are unaffected: they take the chunked path, which
+ * routes through the backend in BOTH modes. Set via VITE_UPLOAD_MODE; exists so
+ * scripts/benchmark can measure the two architectures against one another.
+ */
+type UploadMode = 'presigned' | 'proxy';
+const UPLOAD_MODE: UploadMode =
+  import.meta.env.VITE_UPLOAD_MODE === 'proxy' ? 'proxy' : 'presigned';
+
+/**
+ * Benchmark instrumentation. Off unless VITE_BENCH=1, in which case each task
+ * transition is appended to window.__bench for the harness to read once at the
+ * end of a run. Deliberately a bare array push -- polling React state from the
+ * driver would perturb the thing being measured.
+ */
+const BENCH_ENABLED = import.meta.env.VITE_BENCH === '1';
+const benchMark = (taskId: string, phase: string, extra?: Record<string, unknown>): void => {
+  if (!BENCH_ENABLED) return;
+  const w = window as unknown as { __bench?: Array<Record<string, unknown>> };
+  if (!w.__bench) w.__bench = [];
+  w.__bench.push({ taskId, phase, t: performance.now(), ...extra });
+};
+
 export type UploadStatus = 'pending' | 'uploading' | 'processing' | 'completed' | 'failed' | 'paused' | 'cancelled';
 
 export interface UploadTask {
@@ -213,6 +242,40 @@ export const useFileUpload = () => {
     []
   );
 
+  // Proxied upload: whole file through the backend (pre-0f02ef5 behaviour).
+  // Note there are no XHR progress events here -- the original relied on the
+  // WebSocket for progress. Kept as-is so proxy mode measures what actually ran.
+  const uploadFileProxied = useCallback(
+    async (task: UploadTask, abortController: AbortController): Promise<void> => {
+      try {
+        const response = await uploadApi.uploadPhoto(task.file);
+
+        if (abortController.signal.aborted) {
+          return;
+        }
+
+        setUploadQueue((prev) =>
+          prev.map((t) =>
+            t.id === task.id
+              ? {
+                  ...t,
+                  photoId: response.photoId,
+                  status: 'processing',
+                  progress: 100,
+                }
+              : t
+          )
+        );
+      } catch (error: any) {
+        if (abortController.signal.aborted) {
+          return;
+        }
+        throw error;
+      }
+    },
+    []
+  );
+
   // Chunked upload (for files >= 5MB)
   const uploadFileChunkedWrapper = useCallback(
     async (task: UploadTask, abortController: AbortController): Promise<void> => {
@@ -280,6 +343,11 @@ export const useFileUpload = () => {
     tasksToProcess.forEach((task) => {
       console.log(`[Upload] Starting upload for ${task.file.name} (${formatFileSize(task.file.size)}) - Task ID: ${task.id}`);
 
+      benchMark(task.id, 'start', {
+        bytes: task.file.size,
+        path: needsChunking(task.file.size) ? 'chunked' : UPLOAD_MODE,
+      });
+
       const abortController = new AbortController();
       activeUploadRefs.current.set(task.id, abortController);
 
@@ -308,11 +376,14 @@ export const useFileUpload = () => {
         try {
           if (needsChunking(task.file.size)) {
             await uploadFileChunkedWrapper(task, abortController);
+          } else if (UPLOAD_MODE === 'proxy') {
+            await uploadFileProxied(task, abortController);
           } else {
             await uploadFileDirect(task, abortController);
           }
 
           if (!abortController.signal.aborted) {
+            benchMark(task.id, 'completed');
             console.log(`[Upload] Successfully uploaded ${task.file.name} - Task ID: ${task.id}`);
             setUploadQueue((currentQueue) =>
               currentQueue.map((t) =>
@@ -322,6 +393,7 @@ export const useFileUpload = () => {
           }
         } catch (error: any) {
           if (!abortController.signal.aborted) {
+            benchMark(task.id, 'failed', { message: String(error?.message ?? error) });
             console.error(`[Upload] Upload failed for ${task.file.name}:`, error);
             // Extract better error message
             let errorMessage = 'Upload failed';
@@ -367,7 +439,7 @@ export const useFileUpload = () => {
         }
       })();
     });
-  }, [uploadQueue, activeUploads, uploadFileDirect, uploadFileChunkedWrapper, updateUploadMetrics]);
+  }, [uploadQueue, activeUploads, uploadFileDirect, uploadFileProxied, uploadFileChunkedWrapper, updateUploadMetrics]);
 
   // Add files to queue with validation feedback
   const addFiles = useCallback(
