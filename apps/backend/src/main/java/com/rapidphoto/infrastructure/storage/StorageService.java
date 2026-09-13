@@ -2,6 +2,7 @@ package com.rapidphoto.infrastructure.storage;
 
 import java.io.InputStream;
 import java.time.Duration;
+import java.util.Optional;
 
 public interface StorageService {
     
@@ -48,6 +49,40 @@ public interface StorageService {
      */
     default String generatePresignedUploadUrl(String path, Duration duration) {
         throw new UnsupportedOperationException("Presigned URLs not supported for " + getStorageType());
+    }
+
+    /**
+     * Generate a presigned upload URL that is only valid for a body of exactly
+     * contentLength bytes and the given content type.
+     *
+     * Both values are signed, so a client that sends anything else fails the
+     * signature check at the store rather than succeeding and leaving the
+     * mismatch to be discovered afterwards. Implementations that cannot bind
+     * these fall back to the unconstrained form -- callers must therefore still
+     * verify the stored object once the upload completes.
+     */
+    default String generatePresignedUploadUrl(String path, Duration duration,
+                                              long contentLength, String contentType) {
+        return generatePresignedUploadUrl(path, duration);
+    }
+
+    /**
+     * Size and content type of a stored object, or empty when it is absent.
+     */
+    default Optional<StoredObject> head(String path) {
+        return Optional.empty();
+    }
+
+    /**
+     * First maxBytes of an object, for content sniffing. Returns fewer bytes if
+     * the object is shorter.
+     */
+    default byte[] readPrefix(String path, int maxBytes) {
+        try (InputStream in = retrieve(path)) {
+            return in.readNBytes(maxBytes);
+        } catch (Exception e) {
+            throw new StorageException("Failed to read prefix of: " + path, e);
+        }
     }
 }
 

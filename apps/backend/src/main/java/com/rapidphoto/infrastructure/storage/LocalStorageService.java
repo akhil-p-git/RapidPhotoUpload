@@ -12,6 +12,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.Optional;
 
 @Service
 @ConditionalOnProperty(name = "storage.type", havingValue = "local", matchIfMissing = true)
@@ -63,6 +64,19 @@ public class LocalStorageService implements StorageService {
     public boolean exists(String path) {
         Path targetPath = Paths.get(uploadDir, path);
         return Files.exists(targetPath);
+    }
+
+    @Override
+    public Optional<StoredObject> head(String path) {
+        Path targetPath = Paths.get(uploadDir, path);
+        if (!Files.exists(targetPath)) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(new StoredObject(Files.size(targetPath), Files.probeContentType(targetPath)));
+        } catch (IOException e) {
+            throw new StorageException("Failed to stat file: " + path, e);
+        }
     }
 
     @Override
