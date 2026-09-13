@@ -90,12 +90,15 @@ jwt:
 
 # Rate Limiting Configuration
 rate-limit:
+  # Buckets are keyed per client IP, so everyone behind one NAT or proxy shares
+  # a bucket. The presigned path costs three requests per file, which makes the
+  # upload budget below worth roughly capacity/3 files per minute.
   default:
-    capacity: 100
-    refill-interval: 60  # seconds
+    capacity: ${RATE_LIMIT_DEFAULT_CAPACITY:100}
+    refill-interval: ${RATE_LIMIT_DEFAULT_REFILL_SECONDS:60}  # seconds
   upload:
-    capacity: 5000  # Maximum speed: 5000 req/min for 500 concurrent uploads (500 × 10 chunks)
-    refill-interval: 60  # seconds
+    capacity: ${RATE_LIMIT_UPLOAD_CAPACITY:5000}
+    refill-interval: ${RATE_LIMIT_UPLOAD_REFILL_SECONDS:60}  # seconds
 
 # Management & Monitoring
 management:
