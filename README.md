@@ -1,310 +1,137 @@
-# RapidPhotoUpload ⚡
+# RapidPhotoUpload
 
-> Spring Boot + React media platform with resumable chunked uploads, EXIF/thumbnail processing, WebSocket progress, and Cloudflare R2 storage.
+Spring Boot + React media platform: bulk photo upload straight to object
+storage, EXIF and thumbnail processing, a searchable gallery, and live progress
+over WebSocket.
 
-**Why I built it:** A client needed to upload large batches of high-resolution photos reliably over flaky field connections. Naive multipart uploads kept failing on retries. RapidPhotoUpload solves it with chunked, parallel uploads (1000 images in 2–3 minutes vs 15–20 with the old flow) plus a searchable gallery and EXIF pipeline.
+**Why it exists.** Built against the Teamfront PRD during the Gauntlet AI
+fellowship. The problem the PRD poses is bulk upload of high-resolution photos:
+getting a large batch up quickly, and surviving the failures that come with
+doing a thousand of anything over a network.
 
-> 📸 _Screenshot of the gallery + upload progress UI coming soon._
+**What is honest about the performance story.** Uploading a large batch got
+substantially faster, and the reasons are specific: the backend left the data
+path for small files, client concurrency went up, and a self-imposed rate limit
+was lifted. Chunking is *not* one of the reasons -- it buys recovery, not
+throughput. The numbers, the method, and the limits of both live in
+[PERFORMANCE.md](./PERFORMANCE.md), reproducible via
+[`scripts/benchmark`](./scripts/benchmark). Figures not reproduced there should
+not be quoted.
 
-## ⚡ Ultra-Fast Mode (NEW!)
+## Features
 
-**Upload 1000 images in 2-3 minutes!** (was 15-20 minutes)
+- **Direct-to-storage upload** for files at or below 5 MiB: the browser PUTs to
+  Cloudflare R2 using a presigned URL, so the bytes never cross the backend.
+- **Chunked upload** above 5 MiB, in 5 MiB pieces, ten in parallel per file.
+  These *do* cross the backend, which assembles and forwards them.
+- **Resumable chunked uploads.** Sessions survive a reload; the client asks the
+  server which chunks it holds and sends only the rest.
+- **Upload validation** that survives the bytes not crossing the server: the
+  presigned URL is signed over content-length and content-type, and completion
+  verifies the stored object's real size and sniffs its format.
+- **Gallery** with search, filters, sorting, and pagination.
+- **Processing pipeline**: EXIF extraction and three thumbnail sizes per photo.
+- **JWT auth**, per-user storage quotas, per-IP rate limiting, Prometheus metrics.
 
-- **6-8x faster** bulk uploads
-- 5 parallel chunks per file
-- 150 concurrent file uploads
-- 1000 requests/minute rate limit
-- HTTP/2 enabled
-
-📖 **[Quick Start Guide →](QUICK_START.md)** | **[Full Deployment Guide →](DEPLOYMENT_GUIDE.md)** | **[Performance Details →](ULTRA_FAST_MODE.md)**
-
----
-
-## 🚀 Features
-
-- **⚡ Ultra-Fast Uploads**: Optimized for bulk uploads with parallel chunk processing
-- **Secure Authentication**: JWT-based authentication with Spring Security
-- **Chunked Upload**: Support for large files with resumable uploads
-- **Gallery View**: Responsive photo gallery with search, filters, and sorting
-- **Image Processing**: Automatic thumbnail generation and EXIF data extraction
-- **Storage Options**: CloudFlare R2 (S3-compatible) and local storage
-- **Real-time Updates**: WebSocket support for live upload progress
-- **Rate Limiting**: Configurable rate limits (1000 req/min in ultra-fast mode)
-- **Caching**: Performance optimization with Caffeine cache
-- **Monitoring**: Complete metrics with Prometheus integration
-
-## 🏗️ Architecture
-
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   React     │     │  Spring     │     │ PostgreSQL  │
-│  Frontend   │────▶│   Backend   │────▶│  Database   │
-└─────────────┘     └─────────────┘     └─────────────┘
-                            │
-┌─────────────┐            ▼
-│   React     │     ┌─────────────┐
-│   Native    │────▶│  AWS S3 /   │
-│   Mobile    │     │ Local FS    │
-└─────────────┘     └─────────────┘
-```
-
-### Monorepo Structure
+## Architecture at a glance
 
 ```
-rapid-photo-upload/
-├── apps/
-│   ├── backend/         # Spring Boot API
-│   ├── web/             # React Web App
-│   └── mobile/          # React Native Mobile App
-├── packages/
-│   └── shared/          # Shared code (API clients, types, utils)
-└── docker-compose.yml
+browser ──presign──▶ backend ──▶ Postgres
+   │                    │
+   └───PUT bytes────▶  R2  ◀──── backend (chunked path only)
 ```
 
-## 🛠️ Tech Stack
+Full detail, including which path a file takes and what is known to be broken:
+[ARCHITECTURE.md](./ARCHITECTURE.md).
 
-### Backend
-- **Java 17** with Spring Boot 3.3.5
-- **PostgreSQL** for data persistence
-- **Spring Security** for authentication
-- **JWT** for stateless authentication
-- **Flyway** for database migrations
-- **Thumbnailator** for image processing
-- **Bucket4j** for rate limiting
-- **Caffeine** for caching
+## Stack
 
-### Frontend (Web)
-- **React 18** with TypeScript
-- **Vite** for build tooling
-- **Tailwind CSS** for styling
-- **Axios** for API calls
-- **React Router** for navigation
+**Backend** Java 17, Spring Boot 3.3.5, PostgreSQL + Flyway, Spring Security +
+JWT, AWS SDK v2 against Cloudflare R2, Thumbnailator, Bucket4j, Caffeine,
+Actuator.
+**Web** React 18, TypeScript, Vite, Tailwind, Axios, React Router.
+**Mobile** React Native via Expo.
+**Automation** optional n8n workflows.
 
-### Mobile App
-- **React Native** with Expo
-- **TypeScript** for type safety
-- **React Navigation** for navigation
-- **Expo Camera** for camera access
-- **Expo Image Picker** for gallery selection
-- **React Native Fast Image** for optimized image loading
-- **Expo Secure Store** for secure token storage
+## Running it
 
-## 📋 Prerequisites
-
-- **Java 17+**
-- **Node.js 20+** and **pnpm**
-- **PostgreSQL 15+**
-- **Docker** and **Docker Compose** (for containerized deployment)
-- **AWS Account** (optional, for S3 storage)
-
-## 🚀 Quick Start
-
-### Automated (Recommended)
+Prerequisites: Java 17+, Node 20+ with pnpm, Docker.
 
 ```bash
-# Run locally (frontend + backend + database)
-./scripts/deploy.sh local
-
-# Deploy to GitHub
-./scripts/deploy.sh github
-
-# Deploy to production (Vercel)
-./scripts/deploy.sh production
-```
-
-### Manual Setup
-
-#### 1. Clone the repository
-```bash
-git clone https://github.com/akhil-p-git/RapidPhotoUpload.git
-cd RapidPhotoUpload
-```
-
-#### 2. Start database
-```bash
-docker-compose up postgres -d
-```
-
-#### 3. Install dependencies
-```bash
+docker compose up -d postgres     # database on :54321
 pnpm install
+pnpm dev:backend                  # :8080
+pnpm dev:web                      # :3000
 ```
 
-#### 4. Start backend
-```bash
-pnpm dev:backend
-```
+- Web: http://localhost:3000
+- API: http://localhost:8080
+- Health: http://localhost:8080/actuator/health
+- Metrics: http://localhost:8080/actuator/prometheus
 
-#### 5. Start frontend
-```bash
-pnpm dev:web
-```
+Storage defaults to the local filesystem. The presigned upload path requires an
+S3-compatible store: set `STORAGE_TYPE=s3` with the variables below. For a free
+local one, `scripts/benchmark/docker-compose.minio.yml` brings up MinIO.
 
-The application will be available at:
-- **Frontend**: http://localhost:5173
-- **Backend API**: http://localhost:8080
-- **Health Check**: http://localhost:8080/actuator/health
-- **Metrics**: http://localhost:8080/actuator/prometheus
+## Configuration
 
----
+| Variable | Default | Notes |
+|---|---|---|
+| `DATABASE_URL` | `jdbc:postgresql://localhost:54321/rapidphotoupload` | |
+| `DATABASE_USERNAME` / `DATABASE_PASSWORD` | `postgres` | |
+| `JWT_SECRET` | dev placeholder | min 32 chars; set this in production |
+| `STORAGE_TYPE` | `local` | `s3` for R2 or any S3-compatible store |
+| `S3_BUCKET_NAME` / `S3_ENDPOINT` | - | |
+| `AWS_REGION` | `auto` | `auto` for R2 |
+| `AWS_ACCESS_KEY` / `AWS_SECRET_KEY` | - | keep these out of tracked files |
+| `S3_PATH_STYLE_ACCESS` | `false` | `true` for MinIO |
+| `UPLOAD_CHUNK_SIZE` | `5242880` | 5 MiB; must match `CHUNK_SIZE` in the web app |
+| `UPLOAD_MAX_FILE_SIZE_BYTES` | `104857600` | 100 MiB |
+| `UPLOAD_PRESIGNED_TTL_MINUTES` | `10` | lifetime of an upload URL |
+| `UPLOAD_CLEANUP_TTL_MINUTES` | `120` | before an unfinished upload is reclaimed |
+| `RATE_LIMIT_UPLOAD_CAPACITY` | `5000` | requests/minute per client IP |
 
-## 📚 Documentation
+### Tuned constants
 
-- **[Quick Start Guide](QUICK_START.md)** - Get started in 3 steps
-- **[Deployment Guide](DEPLOYMENT_GUIDE.md)** - Complete deployment instructions
-- **[Ultra-Fast Mode](ULTRA_FAST_MODE.md)** - Performance optimizations explained
-- **[Performance Comparison](PERFORMANCE_COMPARISON.md)** - Performance benchmarks
-- **[Architecture Analysis](UPLOAD_ARCHITECTURE_ANALYSIS.md)** - Deep dive into architecture
+These are the numbers the code actually uses. They have drifted from the docs
+before, so if you change one, change it here too.
 
-## 🔧 Configuration
+| Constant | Value | Where |
+|---|---|---|
+| Chunk size | 5 MiB | `apps/web/src/utils/uploadWorker.ts`, `upload.chunk-size` |
+| Parallel chunks per file | 10 | `useChunkedUpload.ts` |
+| Concurrent file uploads | 12 | `useFileUpload.ts` -- measured, see PERFORMANCE.md |
+| Upload rate limit | 5000 req/min per IP | `rate-limit.upload.capacity` |
+| Chunk retries | 3, exponential backoff | `useChunkedUpload.ts` |
 
-### Environment Variables
+Note the presigned path costs three requests per file (presign, PUT, complete),
+so 5000 requests/minute is worth roughly 1600 files/minute per IP.
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `DATABASE_URL` | PostgreSQL connection URL | `jdbc:postgresql://localhost:54321/rapidphotoupload` |
-| `DATABASE_USERNAME` | Database username | `postgres` |
-| `DATABASE_PASSWORD` | Database password | `postgres` |
-| `JWT_SECRET` | JWT signing secret (min 32 chars) | - |
-| `STORAGE_TYPE` | Storage type: `local` or `s3` | `local` |
-| `S3_BUCKET_NAME` | S3 bucket name (if using S3) | - |
-| `AWS_REGION` | AWS region | `us-east-1` |
-| `AWS_ACCESS_KEY` | AWS access key | - |
-| `AWS_SECRET_KEY` | AWS secret key | - |
+## Deploying
 
-See `.env.example` for complete list.
+`railway.json`, `render.yaml`, `vercel.json` and `docker-compose.yml` are
+checked in for Railway, Render, Vercel and Docker respectively. The backend
+image builds from `apps/backend/Dockerfile`.
 
-### Application Profiles
+If `STORAGE_TYPE=s3`, the bucket needs a CORS rule permitting `PUT` from the web
+app's origin -- without it every direct upload fails its preflight with no
+useful error.
 
-- **dev**: Development profile with debug logging
-- **prod**: Production profile with optimized settings
-- **test**: Test profile with H2 in-memory database
+## Documentation
 
-## 📚 API Documentation
+- [ARCHITECTURE.md](./ARCHITECTURE.md) -- how uploads work, where the speed came
+  from, and known gaps
+- [PERFORMANCE.md](./PERFORMANCE.md) -- measured results and the method behind them
+- [API.md](./API.md) -- endpoints
+- [TESTING.md](./TESTING.md) -- what is covered and what is not
+- [CONTRIBUTING.md](./CONTRIBUTING.md)
 
-### Authentication Endpoints
+## Status
 
-- `POST /api/auth/register` - Register new user
-- `POST /api/auth/login` - Login and get JWT token
-- `POST /api/auth/logout` - Logout (client-side token removal)
-- `GET /api/auth/me` - Get current user info
+A fellowship project, not a production deployment. It has never run under real
+user load, and [ARCHITECTURE.md](./ARCHITECTURE.md) lists defects that are known
+and unfixed.
 
-### Photo Endpoints
+## Author
 
-- `GET /api/photos` - List photos (with pagination, filters, search)
-- `GET /api/photos/{id}` - Get photo details
-- `GET /api/photos/{id}/file?size={size}` - Get photo file (thumbnail, medium, large, original)
-- `DELETE /api/photos/{id}` - Delete photo (soft delete)
-- `GET /api/photos/stats` - Get photo statistics
-
-### Upload Endpoints
-
-- `POST /api/upload` - Direct upload (for small files)
-- `POST /api/upload/initialize` - Initialize chunked upload
-- `POST /api/upload/chunk` - Upload chunk
-
-See `API.md` for detailed API documentation.
-
-## 🧪 Testing
-
-### Run Backend Tests
-```bash
-cd apps/backend
-./gradlew test
-```
-
-### Run Integration Tests
-```bash
-cd apps/backend
-./gradlew integrationTest
-```
-
-### Load Testing
-```bash
-# Use tools like Apache Bench or k6
-ab -n 1000 -c 100 http://localhost:8080/api/photos
-```
-
-## 📦 Deployment
-
-See **[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)** for complete deployment instructions.
-
-### Quick Deploy Commands
-
-```bash
-# Run locally
-./scripts/deploy.sh local
-
-# Push to GitHub
-./scripts/deploy.sh github
-
-# Deploy frontend to Vercel
-./scripts/deploy.sh production
-```
-
-### Production Stack
-
-- **Frontend**: Vercel (auto-deploy from GitHub)
-- **Backend**: Railway / Render / AWS EC2
-- **Database**: PostgreSQL (Railway/RDS)
-- **Storage**: CloudFlare R2 (S3-compatible)
-- **Monitoring**: Prometheus + Grafana
-
-### Environment Requirements
-
-**Ultra-Fast Mode**:
-- CPU: 8+ cores
-- RAM: 8 GB
-- Network: 1 Gbps
-- DB Connections: 50
-
-**Standard Mode**:
-- CPU: 4 cores
-- RAM: 4-6 GB
-- Network: 500 Mbps
-- DB Connections: 50
-
-## 🔍 Monitoring
-
-### Health Checks
-- `GET /actuator/health` - Application health status
-- `GET /actuator/info` - Application information
-
-### Metrics
-- `GET /actuator/metrics` - Application metrics
-- `GET /actuator/prometheus` - Prometheus metrics endpoint
-
-## 🐛 Troubleshooting
-
-### Database Connection Issues
-- Verify PostgreSQL is running
-- Check connection credentials in `.env`
-- Ensure database exists
-
-### Upload Failures
-- Check file size limits (default: 100MB)
-- Verify storage configuration
-- Check disk space (for local storage)
-
-### Authentication Issues
-- Verify JWT secret is set
-- Check token expiration time
-- Ensure token is included in `Authorization: Bearer <token>` header
-
-## 🤝 Contributing
-
-See `CONTRIBUTING.md` for development guidelines.
-
-## 📄 License
-
-MIT — see [LICENSE](LICENSE)
-
-## 👥 Author
-
-Built by [Akhil Pinnani](https://github.com/akhil-p-git) · [akhil-p.dev](https://akhil-p.dev)
-
-## 🙏 Acknowledgments
-
-- Spring Boot team
-- React team
-- All open-source contributors
+Akhil Pinnani - [github.com/akhil-p-git](https://github.com/akhil-p-git)
