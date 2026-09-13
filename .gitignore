@@ -82,3 +82,9 @@ __pycache__/
 .venv/
 *.so
 .vercel
+
+# Benchmark fixtures: multi-GB generated JPEGs. Regenerate deterministically with
+#   pnpm --filter @rapid-photo/benchmark fixtures -- --seed=<n>
+# benchmark-results/ is deliberately NOT ignored: the result JSON is the evidence
+# behind PERFORMANCE.md and belongs in the repo.
+scripts/benchmark/fixtures/
