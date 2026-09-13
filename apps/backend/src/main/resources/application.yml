@@ -69,6 +69,19 @@ upload:
     max-size: ${UPLOAD_MAX_SIZE:300}  # Increased for 500 concurrent uploads
     queue-capacity: ${UPLOAD_QUEUE_CAPACITY:2000}  # Increased for 500 concurrent uploads
   chunk-size: ${UPLOAD_CHUNK_SIZE:5242880}
+  max-file-size-bytes: ${UPLOAD_MAX_FILE_SIZE_BYTES:104857600}  # 100 MB
+  presigned:
+    # Minutes, not hours. A presigned URL is a bearer credential to write at a
+    # specific key; it is used within seconds of being issued, so a long window
+    # only widens the period in which a leaked one still works.
+    ttl-minutes: ${UPLOAD_PRESIGNED_TTL_MINUTES:10}
+  cleanup:
+    enabled: ${UPLOAD_CLEANUP_ENABLED:true}
+    # How long an incomplete chunked upload may sit before its chunks are reclaimed.
+    ttl-minutes: ${UPLOAD_CLEANUP_TTL_MINUTES:120}
+    interval-ms: ${UPLOAD_CLEANUP_INTERVAL_MS:900000}
+    initial-delay-ms: ${UPLOAD_CLEANUP_INITIAL_DELAY_MS:60000}
+    max-per-run: ${UPLOAD_CLEANUP_MAX_PER_RUN:200}
 
 # JWT Configuration
 jwt:
