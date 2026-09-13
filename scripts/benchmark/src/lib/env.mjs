@@ -62,6 +62,14 @@ export async function captureEnvironment({ apiBase, storageTarget, uplink }) {
       dirty: (await tryCmd('git', ['status', '--porcelain'])) ? true : false,
     },
     storage: storageTarget,
+    /**
+     * What the operator says the backend's upload rate limit is. Recorded
+     * because a sweep or a large batch can exhaust the bucket, and a run that
+     * hit 429s is measuring the rate limiter rather than whatever it set out to
+     * measure. Taken from the environment, so it is an assertion about the
+     * backend's config, not a reading from it.
+     */
+    rateLimitUploadCapacity: process.env.RATE_LIMIT_UPLOAD_CAPACITY ?? 'default (5000/min)',
     backend: await probeBackend(apiBase),
     uplink,
   };

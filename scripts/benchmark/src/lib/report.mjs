@@ -101,7 +101,8 @@ function runRow(r) {
   const status = r.outcome === 'completed'
     ? `${r.files.completed}/${r.files.expected}`
     : `**${r.outcome}** ${r.files.completed}/${r.files.expected}`;
-  return `| ${when} | \`${r.mode}\` | ${status} | ${fmt(d.wallClockSeconds, ' s')} | ${fmt(d.throughputMiBs, ' MiB/s')} | `
+  const conc = r.environment?.clientConcurrencyLimit ?? '—';
+  return `| ${when} | \`${r.mode}\` | ${conc} | ${status} | ${fmt(d.wallClockSeconds, ' s')} | ${fmt(d.throughputMiBs, ' MiB/s')} | `
     + `${fmt(d.perFileMs?.p50)} / ${fmt(d.perFileMs?.p95)} / ${fmt(d.perFileMs?.p99)} | `
     + `${fmt(r.requests?.uploadRelated)} | ${fmt(d.excessRequests)} | ${fmt(r.requests?.networkFailures)} | `
     + `${fmt(d.peakConcurrency?.inFlight)} / ${fmt(d.peakConcurrency?.onWire)} | `
@@ -174,15 +175,52 @@ achieve, and how many requests does each architecture cost". It does **not**
 answer "is the current architecture faster in production". Only a \`--target=r2\`
 run can speak to that.
 
+## Concurrency: configured versus achieved
+
+\`MAX_CONCURRENT_UPLOADS\` caps how many files the queue has in flight. It does
+not cap how many requests the browser actually transmits -- Chrome limits
+connections per origin, so beyond that everything queues.
+
+Sweeping the setting across a 50x range against a local S3-compatible store
+(100 files, best of two runs each):
+
+| configured | throughput | peak on wire |
+|---|---|---|
+| 2 | 14.89 MiB/s | 4 |
+| 4 | 14.77 MiB/s | 4 |
+| 6 | 14.92 MiB/s | 4 |
+| 8 | 14.83 MiB/s | 4 |
+| 12 | 14.84 MiB/s | 5 |
+| 16 | 14.89 MiB/s | 4 |
+| 32 | 14.85 MiB/s | 4 |
+| 100 | 15.20 MiB/s | 4 |
+
+Throughput varies by under 3% across the whole range, and the number of
+requests actually in transmission never exceeds five. The previous setting of
+500 bought no parallelism: it bought a deeper queue and a longer pending list
+for React to re-render on every progress event.
+
+Reproduce with:
+
+\`\`\`bash
+node scripts/benchmark/src/sweep-concurrency.mjs --values=2,4,6,8,12,16,32,100 --repeats=2
+\`\`\`
+
+Caveat worth keeping in mind: this is a loopback store, where round-trip time is
+near zero and very little concurrency is needed to saturate it. Against a remote
+store, more requests in flight are needed simply to cover latency, so the knee
+would move right. That is why the shipped value is 12 rather than the measured
+knee of 2 -- see the comment on the constant.
+
 ## Runs
 
-| When (UTC) | Mode | Files ok | Wall clock | Throughput | Per-file p50/p95/p99 (ms) | Upload reqs | Excess | Net fails | Peak in-flight / on-wire | Uplink |
-|---|---|---|---|---|---|---|---|---|---|---|
+| When (UTC) | Mode | Max conc | Files ok | Wall clock | Throughput | Per-file p50/p95/p99 (ms) | Upload reqs | Excess | Net fails | Peak in-flight / on-wire | Uplink |
+|---|---|---|---|---|---|---|---|---|---|---|---|
 `;
 
   const body = results.length
     ? results.map(runRow).join('\n')
-    : '| _no runs recorded yet_ | | | | | | | | | | |';
+    : '| _no runs recorded yet_ | | | | | | | | | | | |';
 
   let detail = '';
   if (results.length) {
@@ -204,6 +242,7 @@ run can speak to that.
         + `expected minimum ${d.expectedRequests}, excess ${d.excessRequests}\n`
         + `- Rate limited (429): ${r.requests?.status429} · other 4xx: ${r.requests?.status4xx} · `
         + `5xx: ${r.requests?.status5xx} · network failures: ${r.requests?.networkFailures}\n`
+        + `- Configured MAX_CONCURRENT_UPLOADS: ${env.clientConcurrencyLimit ?? '—'}\n`
         + `- Peak concurrency: ${d.peakConcurrency?.inFlight} in flight, `
         + `**${d.peakConcurrency?.onWire} actually on the wire**\n`
         + `- By request kind: ${Object.entries(r.requests?.byKind ?? {}).map(([k, v]) => `${k}=${v}`).join(', ') || '—'}\n`

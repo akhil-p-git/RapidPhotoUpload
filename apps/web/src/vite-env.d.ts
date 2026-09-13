@@ -13,6 +13,8 @@ interface ImportMetaEnv {
   readonly VITE_UPLOAD_MODE?: 'presigned' | 'proxy';
   /** '1' enables benchmark timing marks on window.__bench. Off by default. */
   readonly VITE_BENCH?: string;
+  /** Overrides MAX_CONCURRENT_UPLOADS. Used by the benchmark's concurrency sweep. */
+  readonly VITE_MAX_CONCURRENT_UPLOADS?: string;
 }
 
 interface ImportMeta {

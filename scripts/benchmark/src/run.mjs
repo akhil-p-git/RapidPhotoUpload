@@ -39,6 +39,8 @@ const DEFAULTS = {
   username: 'benchmarkuser',
   password: 'benchmark-pass-1234',
   timeoutMinutes: 45,
+  /** Overrides the client's MAX_CONCURRENT_UPLOADS for this run. */
+  concurrency: null,
 };
 
 function parseArgs(argv) {
@@ -71,6 +73,7 @@ async function startDevServer(opts) {
         VITE_UPLOAD_MODE: opts.mode,
         VITE_BENCH: '1',
         VITE_API_URL: opts.apiBase,
+        ...(opts.concurrency ? { VITE_MAX_CONCURRENT_UPLOADS: String(opts.concurrency) } : {}),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
       // Own process group: `pnpm` execs node/vite as children, and signalling
@@ -162,6 +165,7 @@ async function main() {
     `Benchmark\n` +
     `  mode      ${opts.mode}\n` +
     `  target    ${opts.target}\n` +
+    (opts.concurrency ? `  maxConc   ${opts.concurrency}\n` : '') +
     `  fixtures  ${manifest.count} files, ${(manifest.totalBytes / 1024 ** 2).toFixed(1)} MiB ` +
     `(${manifest.countOverChunkThreshold} chunked)\n\n`
   );
@@ -214,6 +218,8 @@ async function main() {
   }
 
   environment.runtime.chromium = raw.chromiumVersion;
+
+  environment.clientConcurrencyLimit = opts.concurrency ?? 'default (500)';
 
   const result = analyse(raw, {
     manifest,
