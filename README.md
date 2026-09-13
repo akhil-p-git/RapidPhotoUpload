@@ -31,7 +31,7 @@ not be quoted.
   verifies the stored object's real size and sniffs its format.
 - **Gallery** with search, filters, sorting, and pagination.
 - **Processing pipeline**: EXIF extraction and three thumbnail sizes per photo.
-- **JWT auth**, per-user storage quotas, per-IP rate limiting, Prometheus metrics.
+- **JWT auth**, per-user storage quotas, per-user rate limiting, Prometheus metrics.
 
 ## Architecture at a glance
 
@@ -89,7 +89,7 @@ local one, `scripts/benchmark/docker-compose.minio.yml` brings up MinIO.
 | `UPLOAD_MAX_FILE_SIZE_BYTES` | `104857600` | 100 MiB |
 | `UPLOAD_PRESIGNED_TTL_MINUTES` | `10` | lifetime of an upload URL |
 | `UPLOAD_CLEANUP_TTL_MINUTES` | `120` | before an unfinished upload is reclaimed |
-| `RATE_LIMIT_UPLOAD_CAPACITY` | `5000` | requests/minute per client IP |
+| `RATE_LIMIT_UPLOAD_CAPACITY` | `5000` | requests/minute, per authenticated user |
 
 ### Tuned constants
 
@@ -101,11 +101,12 @@ before, so if you change one, change it here too.
 | Chunk size | 5 MiB | `apps/web/src/utils/uploadWorker.ts`, `upload.chunk-size` |
 | Parallel chunks per file | 10 | `useChunkedUpload.ts` |
 | Concurrent file uploads | 12 | `useFileUpload.ts` -- measured, see PERFORMANCE.md |
-| Upload rate limit | 5000 req/min per IP | `rate-limit.upload.capacity` |
+| Upload rate limit | 5000 req/min per user | `rate-limit.upload.capacity` |
 | Chunk retries | 3, exponential backoff | `useChunkedUpload.ts` |
 
 Note the presigned path costs three requests per file (presign, PUT, complete),
-so 5000 requests/minute is worth roughly 1600 files/minute per IP.
+so 5000 requests/minute is worth roughly 1600 files/minute per user.
+Unauthenticated requests fall back to a per-IP bucket.
 
 ## Deploying
 
