@@ -17,8 +17,11 @@ RUN ./gradlew dependencies --no-daemon || true
 # Copy source code
 COPY src src
 
-# Build application (skip tests for faster build)
-RUN ./gradlew clean build -x test --no-daemon
+# Build application (skip tests for faster build).
+# bootJar, not build: `build` also produces the non-executable `-plain.jar`, and
+# the COPY below then matches two files and fails with "When using COPY with
+# more than one source file, the destination must be a directory".
+RUN ./gradlew clean bootJar --no-daemon
 
 # Runtime stage
 FROM eclipse-temurin:17-jre-alpine
@@ -34,8 +37,10 @@ COPY --from=build /app/build/libs/*.jar app.jar
 # Create non-root user
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
-# Create uploads directory
-RUN mkdir -p /app/uploads && chown -R appuser:appgroup /app/uploads
+# Create writable directories for the non-root runtime user.
+# logs/ is required: logback-spring.xml writes ./logs/rapidphoto.log and treats
+# failure to open it as fatal, so without this the container exits at startup.
+RUN mkdir -p /app/uploads /app/logs && chown -R appuser:appgroup /app/uploads /app/logs
 
 # Switch to non-root user
 USER appuser
