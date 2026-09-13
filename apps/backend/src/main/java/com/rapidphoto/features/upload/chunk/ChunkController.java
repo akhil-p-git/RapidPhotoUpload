@@ -45,9 +45,11 @@ public class ChunkController {
         UUID userId = UUID.fromString(authentication.getName());
         
         // Verify photo ownership
-        Photo photo = photoRepository.findById(photoId)
-            .orElseThrow(() -> new IllegalArgumentException("Photo not found: " + photoId));
-        
+        Photo photo = photoRepository.findById(photoId).orElse(null);
+        if (photo == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
+        }
+
         if (!photo.getUserId().getValue().equals(userId)) {
             logger.warn("Unauthorized chunk upload attempt: userId={}, photoId={}", userId, photoId);
             return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
@@ -66,13 +68,42 @@ public class ChunkController {
         return ResponseEntity.ok(response);
     }
 
+    /**
+     * Which chunks the server already holds for a photo.
+     *
+     * This is the endpoint a resuming client calls before deciding what to
+     * send, so it is also the endpoint that must not leak: it previously
+     * performed no authentication or ownership check at all, which let any
+     * caller enumerate upload state for an arbitrary photo id.
+     *
+     * totalChunks is optional and advisory. When omitted the server derives the
+     * expected count from the stored file size and its own chunk size.
+     */
     @GetMapping("/progress/{photoId}")
     public ResponseEntity<ChunkUploadResponse> getProgress(
             @PathVariable UUID photoId,
-            @RequestParam Integer totalChunks) {
-        
-        ChunkUploadResponse response = chunkUploadService.getUploadProgress(photoId, totalChunks);
-        return ResponseEntity.ok(response);
+            @RequestParam(required = false) Integer totalChunks) {
+
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || !authentication.isAuthenticated()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+
+        UUID userId = UUID.fromString(authentication.getName());
+
+        Photo photo = photoRepository.findById(photoId).orElse(null);
+        if (photo == null) {
+            // Same shape as the forbidden case on purpose: distinguishing
+            // "no such photo" from "not yours" tells an attacker which ids exist.
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
+        }
+
+        if (!photo.getUserId().getValue().equals(userId)) {
+            logger.warn("Unauthorized progress read: userId={}, photoId={}", userId, photoId);
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
+        }
+
+        return ResponseEntity.ok(chunkUploadService.getUploadProgress(photoId, totalChunks));
     }
 }
 
