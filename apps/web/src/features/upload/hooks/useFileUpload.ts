@@ -5,7 +5,35 @@ import { useWebSocket } from './useWebSocket';
 import { needsChunking, generateThumbnail, isValidImageFile, isDuplicateFile, formatFileSize } from '../../../utils/fileUtils';
 import { UploadProgress } from '../../../types/upload.types';
 
-const MAX_CONCURRENT_UPLOADS = 500; // Maximum speed: 500 parallel uploads for ultra-fast bulk uploads
+/**
+ * How many files the queue will have in flight at once.
+ *
+ * Was 500, arrived at by guesswork -- git log shows it move 250, 500, 50, 100,
+ * 500 with no measurement attached to any of it.
+ *
+ * Measured (scripts/benchmark, concurrency sweep, 100 files against a local
+ * S3-compatible store; see PERFORMANCE.md):
+ *
+ *     configured    2     4     6     8    12    16    32   100
+ *     MiB/s     14.89 14.77 14.92 14.83 14.84 14.89 14.85 15.20
+ *     on wire       4     4     4     4     5     4     4     4
+ *
+ * Throughput is flat within 3% across a 50x range of this setting, and the
+ * number of requests Chrome actually had in transmission never exceeded five.
+ * The browser caps connections per origin, so everything above that queues:
+ * 500 was not buying parallelism, only a deeper queue and more React state
+ * churn over a longer pending list.
+ *
+ * 12 rather than the measured knee of 2: that knee is from a loopback store
+ * where round-trip time is ~0, and a couple of requests are enough to saturate
+ * it. Against a remote store, more requests in flight are needed just to cover
+ * latency. 12 is twice the browser's per-origin limit of 6, covering the two
+ * origins this path uses (the API and the object store), and sits above every
+ * on-wire peak observed. It should be re-measured against R2.
+ *
+ * Overridable so the benchmark can sweep it.
+ */
+const MAX_CONCURRENT_UPLOADS = Number(import.meta.env.VITE_MAX_CONCURRENT_UPLOADS) || 12;
 let taskIdCounter = 0;
 
 /**
