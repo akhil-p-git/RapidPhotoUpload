@@ -140,12 +140,12 @@ public class UploadService {
         }
     }
 
-    public UploadPhotoResponse initializeUpload(UploadPhotoRequest request) {
+    public UploadPhotoResponse initializeUpload(UUID userId, UploadPhotoRequest request) {
         // For chunked uploads - initialize upload session
         String fileName = UUID.randomUUID().toString() + "_" + request.getOriginalFileName();
         
         StartPhotoUploadCommand command = new StartPhotoUploadCommand(
-            request.getUserId(),
+            userId,
             fileName,
             request.getOriginalFileName(),
             request.getFileSizeBytes(),
@@ -158,13 +158,13 @@ public class UploadService {
         int totalChunks = calculateTotalChunks(request.getFileSizeBytes());
         progressTracker.initializeProgress(
             photoId,
-            request.getUserId(),
+            userId,
             request.getFileSizeBytes(),
             totalChunks
         );
 
         logger.info("Upload initialized: photoId={}, userId={}, totalChunks={}", 
-            photoId, request.getUserId(), totalChunks);
+            photoId, userId, totalChunks);
 
         return new UploadPhotoResponse(
             photoId,
