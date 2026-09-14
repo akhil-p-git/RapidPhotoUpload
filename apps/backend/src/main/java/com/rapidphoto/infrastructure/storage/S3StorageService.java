@@ -11,12 +11,16 @@ import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.*;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
+import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
+import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
+import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
 import software.amazon.awssdk.services.s3.presigner.model.PresignedGetObjectRequest;
 import software.amazon.awssdk.services.s3.presigner.model.PutObjectPresignRequest;
 
 import java.io.InputStream;
 import java.time.Duration;
+import java.util.Optional;
 
 @Service
 @ConditionalOnProperty(name = "storage.type", havingValue = "s3")
@@ -121,6 +125,80 @@ public class S3StorageService implements StorageService {
     @Override
     public String getStorageType() {
         return "S3";
+    }
+
+    @Override
+    public Optional<StoredObject> head(String path) {
+        try {
+            HeadObjectResponse response = s3Client.headObject(HeadObjectRequest.builder()
+                .bucket(bucketName)
+                .key(path)
+                .build());
+            return Optional.of(new StoredObject(response.contentLength(), response.contentType()));
+        } catch (NoSuchKeyException e) {
+            return Optional.empty();
+        } catch (S3Exception e) {
+            // A HEAD on a missing key surfaces as a bare 404 rather than
+            // NoSuchKey on some S3-compatible servers, R2 included.
+            if (e.statusCode() == 404) {
+                return Optional.empty();
+            }
+            throw new StorageException("Failed to stat object: " + path, e);
+        }
+    }
+
+    @Override
+    public byte[] readPrefix(String path, int maxBytes) {
+        try {
+            GetObjectRequest request = GetObjectRequest.builder()
+                .bucket(bucketName)
+                .key(path)
+                .range("bytes=0-" + (maxBytes - 1))
+                .build();
+            try (InputStream in = s3Client.getObject(request)) {
+                return in.readNBytes(maxBytes);
+            }
+        } catch (Exception e) {
+            throw new StorageException("Failed to read prefix of: " + path, e);
+        }
+    }
+
+    /**
+     * Presigned PUT bound to an exact body size and content type.
+     *
+     * contentLength and contentType are set on the underlying request so the
+     * presigner includes them in SignedHeaders. A client that then PUTs a
+     * different number of bytes produces a different canonical request and the
+     * store rejects it with SignatureDoesNotMatch -- the cap is enforced by the
+     * object store, not by trusting the client.
+     *
+     * This binds an exact length, not a range. The S3 mechanism for a range is
+     * a POST policy with content-length-range, which needs POST Object; do not
+     * assume R2 supports that without checking. Either way, /upload/complete
+     * still verifies the stored object, which is the check that holds
+     * regardless of what any particular store enforces at PUT time.
+     */
+    @Override
+    public String generatePresignedUploadUrl(String path, Duration duration,
+                                             long contentLength, String contentType) {
+        try {
+            PutObjectRequest putObjectRequest = PutObjectRequest.builder()
+                .bucket(bucketName)
+                .key(path)
+                .contentLength(contentLength)
+                .contentType(contentType)
+                .build();
+
+            PutObjectPresignRequest presignRequest = PutObjectPresignRequest.builder()
+                .signatureDuration(duration)
+                .putObjectRequest(putObjectRequest)
+                .build();
+
+            return s3Presigner.presignPutObject(presignRequest).url().toString();
+
+        } catch (S3Exception e) {
+            throw new StorageException("Failed to generate constrained presigned upload URL: " + path, e);
+        }
     }
 
     /**

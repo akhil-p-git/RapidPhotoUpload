@@ -11,6 +11,13 @@ public class ChunkUploadResponse {
     private Integer totalChunks;
     private Double progress;
     private List<Integer> missingChunks;
+    /**
+     * Chunk numbers the server holds, ascending. Resume needs this explicitly:
+     * with PARALLEL_CHUNKS_PER_FILE chunks in flight they can land out of
+     * order, so a count says how many arrived but not which, and a client that
+     * assumed "the first N" would skip chunks the server never received.
+     */
+    private List<Integer> receivedChunks;
     private String message;
 
     public ChunkUploadResponse() {}
@@ -46,6 +53,9 @@ public class ChunkUploadResponse {
     
     public List<Integer> getMissingChunks() { return missingChunks; }
     public void setMissingChunks(List<Integer> missingChunks) { this.missingChunks = missingChunks; }
+
+    public List<Integer> getReceivedChunks() { return receivedChunks; }
+    public void setReceivedChunks(List<Integer> receivedChunks) { this.receivedChunks = receivedChunks; }
     
     public String getMessage() { return message; }
     public void setMessage(String message) { this.message = message; }

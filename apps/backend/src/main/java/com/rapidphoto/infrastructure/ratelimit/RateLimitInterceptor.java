@@ -24,6 +24,9 @@ public class RateLimitInterceptor implements HandlerInterceptor {
     @Autowired
     private Cache<String, Bucket> bucketCache;
 
+    @Autowired
+    private RateLimitConfig rateLimitConfig;
+
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
         // Skip rate limiting for health checks and actuator endpoints
@@ -37,19 +40,19 @@ public class RateLimitInterceptor implements HandlerInterceptor {
         if (authentication == null || !authentication.isAuthenticated()) {
             // For unauthenticated requests, use IP address
             String clientIp = getClientIp(request);
-            Bucket bucket = RateLimitConfig.createBucket(bucketCache, "ip:" + clientIp);
+            Bucket bucket = rateLimitConfig.bucketFor(bucketCache, "ip:" + clientIp);
             
             if (!bucket.tryConsume(1)) {
                 logger.warn("Rate limit exceeded for IP: {}", clientIp);
                 response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
-                response.setHeader("X-RateLimit-Limit", "100");
+                response.setHeader("X-RateLimit-Limit", String.valueOf(rateLimitConfig.getDefaultCapacity()));
                 response.setHeader("X-RateLimit-Remaining", "0");
                 response.setHeader("Retry-After", "60");
                 response.getWriter().write("{\"error\":\"Rate limit exceeded. Please try again later.\"}");
                 return false;
             }
             
-            response.setHeader("X-RateLimit-Limit", "100");
+            response.setHeader("X-RateLimit-Limit", String.valueOf(rateLimitConfig.getDefaultCapacity()));
             response.setHeader("X-RateLimit-Remaining", String.valueOf(bucket.getAvailableTokens()));
             return true;
         }
@@ -61,22 +64,22 @@ public class RateLimitInterceptor implements HandlerInterceptor {
             // Determine bucket based on endpoint
             Bucket bucket;
             if (path.startsWith("/api/upload")) {
-                bucket = RateLimitConfig.createUploadBucket(bucketCache, rateLimitKey);
+                bucket = rateLimitConfig.uploadBucketFor(bucketCache, rateLimitKey);
             } else {
-                bucket = RateLimitConfig.createBucket(bucketCache, rateLimitKey);
+                bucket = rateLimitConfig.bucketFor(bucketCache, rateLimitKey);
             }
             
             if (!bucket.tryConsume(1)) {
                 logger.warn("Rate limit exceeded for user: {}", userId);
                 response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
-                response.setHeader("X-RateLimit-Limit", path.startsWith("/api/upload") ? "200" : "100");
+                response.setHeader("X-RateLimit-Limit", String.valueOf(limitFor(path)));
                 response.setHeader("X-RateLimit-Remaining", "0");
                 response.setHeader("Retry-After", "60");
                 response.getWriter().write("{\"error\":\"Rate limit exceeded. Please try again later.\"}");
                 return false;
             }
             
-            response.setHeader("X-RateLimit-Limit", path.startsWith("/api/upload") ? "200" : "100");
+            response.setHeader("X-RateLimit-Limit", String.valueOf(limitFor(path)));
             response.setHeader("X-RateLimit-Remaining", String.valueOf(bucket.getAvailableTokens()));
             return true;
         } catch (Exception e) {
@@ -84,6 +87,13 @@ public class RateLimitInterceptor implements HandlerInterceptor {
             // Allow request to proceed if rate limiting fails
             return true;
         }
+    }
+
+    /** The limit that applies to a path, so the header cannot drift from the bucket. */
+    private long limitFor(String path) {
+        return path.startsWith("/api/upload")
+            ? rateLimitConfig.getUploadCapacity()
+            : rateLimitConfig.getDefaultCapacity();
     }
 
     private String getClientIp(HttpServletRequest request) {

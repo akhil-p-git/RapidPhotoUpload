@@ -79,14 +79,11 @@ public class UploadController {
         
         UUID userId = UUID.fromString(authentication.getName());
         
-        // Set userId from authentication
-        request.setUserId(userId);
-        
         logger.info("Initialize upload request: userId={}, fileName={}, size={}", 
             userId, request.getOriginalFileName(), request.getFileSizeBytes());
 
         try {
-            UploadPhotoResponse response = uploadService.initializeUpload(request);
+            UploadPhotoResponse response = uploadService.initializeUpload(userId, request);
             return ResponseEntity.ok(response);
         } catch (Exception e) {
             logger.error("Failed to initialize upload", e);

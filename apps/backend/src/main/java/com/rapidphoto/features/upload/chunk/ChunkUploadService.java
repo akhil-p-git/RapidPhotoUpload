@@ -2,6 +2,7 @@ package com.rapidphoto.features.upload.chunk;
 
 import com.rapidphoto.domain.photo.Photo;
 import com.rapidphoto.domain.photo.PhotoRepository;
+import com.rapidphoto.domain.photo.PhotoStatus;
 import com.rapidphoto.domain.photo.UploadChunk;
 import com.rapidphoto.domain.photo.UploadChunkRepository;
 import com.rapidphoto.features.upload.progress.ProgressBroadcastService;
@@ -15,7 +16,9 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.security.MessageDigest;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -59,7 +62,28 @@ public class ChunkUploadService {
             // Check if chunk already uploaded (idempotency)
             if (chunkRepository.existsByPhotoIdAndChunkNumber(photoId, chunkNumber)) {
                 logger.info("Chunk already uploaded: photoId={}, chunk={}", photoId, chunkNumber);
-                return getUploadProgress(photoId, request.getTotalChunks());
+
+                ChunkUploadResponse progress = getUploadProgress(photoId, request.getTotalChunks());
+
+                // A resuming client that finds every chunk already stored has no
+                // chunk left to send, yet the file may never have been assembled
+                // -- the process can die between the final chunk landing and
+                // assembly starting. Treat a duplicate of the last outstanding
+                // chunk as a completeness check so one cheap re-send is enough to
+                // recover, rather than leaving the upload stuck for ever.
+                boolean complete = progress.getMissingChunks() != null
+                    && progress.getMissingChunks().isEmpty()
+                    && progress.getTotalChunks() != null
+                    && progress.getTotalChunks() > 0;
+
+                if (complete && photo.getStatus() == PhotoStatus.UPLOADING) {
+                    logger.info("All chunks present but photo still UPLOADING; starting assembly: {}", photoId);
+                    assemblyService.assembleChunks(photoId, progress.getTotalChunks());
+                    progress.setStatus("COMPLETED");
+                    progress.setMessage("Upload already complete. Assembling file.");
+                }
+
+                return progress;
             }
 
             // Store chunk to temporary location
@@ -125,30 +149,51 @@ public class ChunkUploadService {
         }
     }
 
+    /**
+     * Number of chunks a file of this size is split into, from the server's own
+     * configured chunk size. Derived rather than taken from the client so a
+     * caller cannot shrink the expected total and be told an upload is complete.
+     */
+    public int expectedChunkCount(long fileSizeBytes) {
+        if (fileSizeBytes <= 0) return 0;
+        return (int) ((fileSizeBytes + chunkSize - 1) / chunkSize);
+    }
+
     public ChunkUploadResponse getUploadProgress(UUID photoId, Integer totalChunks) {
-        long uploadedCount = chunkRepository.countByPhotoIdAndStatus(photoId, UploadChunk.ChunkStatus.UPLOADED);
-        
-        // Find missing chunks
-        List<UploadChunk> uploadedChunks = chunkRepository.findByPhotoIdOrderByChunkNumberAsc(photoId);
-        List<Integer> uploadedNumbers = uploadedChunks.stream()
+        int expected = totalChunks != null && totalChunks > 0
+            ? totalChunks
+            : photoRepository.findById(photoId)
+                .map(p -> expectedChunkCount(p.getFileSizeBytes()))
+                .orElse(0);
+
+        // Received set and count come from one query over one status. They were
+        // previously derived from two different queries -- a count filtered to
+        // UPLOADED and a list that included every row regardless of status -- so
+        // a PENDING or FAILED row made the two disagree and a chunk that never
+        // landed was reported as present.
+        List<Integer> receivedChunks = chunkRepository
+            .findByPhotoIdAndStatusOrderByChunkNumberAsc(photoId, UploadChunk.ChunkStatus.UPLOADED)
+            .stream()
             .map(UploadChunk::getChunkNumber)
             .collect(Collectors.toList());
-        
-        List<Integer> missingChunks = IntStream.range(0, totalChunks)
-            .filter(i -> !uploadedNumbers.contains(i))
+
+        Set<Integer> received = new HashSet<>(receivedChunks);
+        List<Integer> missingChunks = IntStream.range(0, expected)
+            .filter(i -> !received.contains(i))
             .boxed()
             .collect(Collectors.toList());
 
         ChunkUploadResponse response = new ChunkUploadResponse(
             photoId,
             null,
-            "IN_PROGRESS",
-            (int) uploadedCount,
-            totalChunks
+            missingChunks.isEmpty() && expected > 0 ? "COMPLETED" : "IN_PROGRESS",
+            receivedChunks.size(),
+            expected
         );
+        response.setReceivedChunks(receivedChunks);
         response.setMissingChunks(missingChunks);
-        response.setMessage(String.format("%d/%d chunks uploaded", uploadedCount, totalChunks));
-        
+        response.setMessage(String.format("%d/%d chunks uploaded", receivedChunks.size(), expected));
+
         return response;
     }
 

@@ -1,0 +1,51 @@
+# Local S3-compatible target for benchmark runs.
+#
+# Why this exists: the presigned upload path cannot run against STORAGE_TYPE=local
+# (LocalStorageService does not implement generatePresignedUploadUrl), and a
+# proxy-vs-presigned comparison is only meaningful if BOTH modes write to the
+# same object store. MinIO gives a free, repeatable target for the concurrency
+# sweep. It is loopback, so it measures architecture, NOT internet upload time --
+# use --target=r2 for numbers that mean anything about real-world duration.
+#
+# Images come from quay.io: MinIO's Docker Hub repositories are no longer
+# publicly pullable ("pull access denied for minio/minio").
+#
+# Credentials here are throwaway values for a local container. They are not
+# secrets and must never be reused anywhere else.
+
+services:
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: benchlocal
+      MINIO_ROOT_PASSWORD: benchlocal123
+      # The browser PUTs straight at MinIO from the Vite origin, so CORS must
+      # permit it. Without this every direct upload fails the preflight.
+      MINIO_API_CORS_ALLOW_ORIGIN: "http://localhost:3000,http://127.0.0.1:3000"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  createbucket:
+    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 benchlocal benchlocal123 &&
+      (mc mb --ignore-existing local/bench-uploads) &&
+      mc anonymous set download local/bench-uploads &&
+      echo 'bucket bench-uploads ready'
+      "
+
+volumes:
+  minio_data:

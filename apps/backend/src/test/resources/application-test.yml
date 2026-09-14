@@ -1,18 +1,41 @@
 spring:
   datasource:
-    url: jdbc:h2:mem:testdb
+    # H2 stands in for Postgres here. Two settings are load-bearing:
+    #   MODE=PostgreSQL      - Postgres syntax and semantics.
+    #   INIT=CREATE DOMAIN.. - the entities declare columnDefinition = "jsonb",
+    #                          which is a Postgres type H2 does not know. Without
+    #                          a domain aliasing it, schema export fails for every
+    #                          table carrying one, and every test that touches a
+    #                          Photo dies with 'Table "PHOTOS" not found'. That is
+    #                          what previously made 16 of the 20 tests fail.
+    # Fidelity gap: this does not exercise real jsonb behaviour or the Flyway
+    # migrations. See TESTING.md.
+    url: "jdbc:h2:mem:testdb;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;INIT=CREATE DOMAIN IF NOT EXISTS jsonb AS TEXT"
     driver-class-name: org.h2.Driver
     username: sa
-    password: 
+    password:
   jpa:
     hibernate:
       ddl-auto: create-drop
     show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
   flyway:
+    enabled: false
+
+storage:
+  type: local
+  local:
+    upload-dir: ./build/test-uploads
+
+upload:
+  cleanup:
+    # The sweep is driven explicitly in tests; a background timer would make
+    # assertions race against it.
     enabled: false
 
 logging:
   level:
     com.rapidphoto: DEBUG
     org.springframework: WARN
-

@@ -5,8 +5,65 @@ import { useWebSocket } from './useWebSocket';
 import { needsChunking, generateThumbnail, isValidImageFile, isDuplicateFile, formatFileSize } from '../../../utils/fileUtils';
 import { UploadProgress } from '../../../types/upload.types';
 
-const MAX_CONCURRENT_UPLOADS = 500; // Maximum speed: 500 parallel uploads for ultra-fast bulk uploads
+/**
+ * How many files the queue will have in flight at once.
+ *
+ * Was 500, arrived at by guesswork -- git log shows it move 250, 500, 50, 100,
+ * 500 with no measurement attached to any of it.
+ *
+ * Measured (scripts/benchmark, concurrency sweep, 100 files against a local
+ * S3-compatible store; see PERFORMANCE.md):
+ *
+ *     configured    2     4     6     8    12    16    32   100
+ *     MiB/s     14.89 14.77 14.92 14.83 14.84 14.89 14.85 15.20
+ *     on wire       4     4     4     4     5     4     4     4
+ *
+ * Throughput is flat within 3% across a 50x range of this setting, and the
+ * number of requests Chrome actually had in transmission never exceeded five.
+ * The browser caps connections per origin, so everything above that queues:
+ * 500 was not buying parallelism, only a deeper queue and more React state
+ * churn over a longer pending list.
+ *
+ * 12 rather than the measured knee of 2: that knee is from a loopback store
+ * where round-trip time is ~0, and a couple of requests are enough to saturate
+ * it. Against a remote store, more requests in flight are needed just to cover
+ * latency. 12 is twice the browser's per-origin limit of 6, covering the two
+ * origins this path uses (the API and the object store), and sits above every
+ * on-wire peak observed. It should be re-measured against R2.
+ *
+ * Overridable so the benchmark can sweep it.
+ */
+const MAX_CONCURRENT_UPLOADS = Number(import.meta.env.VITE_MAX_CONCURRENT_UPLOADS) || 12;
 let taskIdCounter = 0;
+
+/**
+ * Which path sub-chunk-threshold files take.
+ *
+ *   'presigned' (default) - browser PUTs straight to R2/S3. Current architecture.
+ *   'proxy'               - bytes go through the backend via POST /api/upload.
+ *                           This is what the code did before commit 0f02ef5.
+ *
+ * Files above CHUNK_SIZE are unaffected: they take the chunked path, which
+ * routes through the backend in BOTH modes. Set via VITE_UPLOAD_MODE; exists so
+ * scripts/benchmark can measure the two architectures against one another.
+ */
+type UploadMode = 'presigned' | 'proxy';
+const UPLOAD_MODE: UploadMode =
+  import.meta.env.VITE_UPLOAD_MODE === 'proxy' ? 'proxy' : 'presigned';
+
+/**
+ * Benchmark instrumentation. Off unless VITE_BENCH=1, in which case each task
+ * transition is appended to window.__bench for the harness to read once at the
+ * end of a run. Deliberately a bare array push -- polling React state from the
+ * driver would perturb the thing being measured.
+ */
+const BENCH_ENABLED = import.meta.env.VITE_BENCH === '1';
+const benchMark = (taskId: string, phase: string, extra?: Record<string, unknown>): void => {
+  if (!BENCH_ENABLED) return;
+  const w = window as unknown as { __bench?: Array<Record<string, unknown>> };
+  if (!w.__bench) w.__bench = [];
+  w.__bench.push({ taskId, phase, t: performance.now(), ...extra });
+};
 
 export type UploadStatus = 'pending' | 'uploading' | 'processing' | 'completed' | 'failed' | 'paused' | 'cancelled';
 
@@ -36,7 +93,13 @@ export const useFileUpload = () => {
   const progressTimers = useRef<Map<string, NodeJS.Timeout>>(new Map());
   const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
   
-  const { uploadFileChunked } = useChunkedUpload();
+  const { uploadFileChunked, clearSessionForFile, pruneStaleSessions } = useChunkedUpload();
+
+  // Discard resume records the server has already collected, so the store does
+  // not accumulate one entry per abandoned upload for the life of the browser.
+  useEffect(() => {
+    pruneStaleSessions().catch(() => {});
+  }, [pruneStaleSessions]);
 
   // WebSocket progress handler
   const handleWebSocketProgress = useCallback((progress: UploadProgress) => {
@@ -213,6 +276,40 @@ export const useFileUpload = () => {
     []
   );
 
+  // Proxied upload: whole file through the backend (pre-0f02ef5 behaviour).
+  // Note there are no XHR progress events here -- the original relied on the
+  // WebSocket for progress. Kept as-is so proxy mode measures what actually ran.
+  const uploadFileProxied = useCallback(
+    async (task: UploadTask, abortController: AbortController): Promise<void> => {
+      try {
+        const response = await uploadApi.uploadPhoto(task.file);
+
+        if (abortController.signal.aborted) {
+          return;
+        }
+
+        setUploadQueue((prev) =>
+          prev.map((t) =>
+            t.id === task.id
+              ? {
+                  ...t,
+                  photoId: response.photoId,
+                  status: 'processing',
+                  progress: 100,
+                }
+              : t
+          )
+        );
+      } catch (error: any) {
+        if (abortController.signal.aborted) {
+          return;
+        }
+        throw error;
+      }
+    },
+    []
+  );
+
   // Chunked upload (for files >= 5MB)
   const uploadFileChunkedWrapper = useCallback(
     async (task: UploadTask, abortController: AbortController): Promise<void> => {
@@ -280,6 +377,11 @@ export const useFileUpload = () => {
     tasksToProcess.forEach((task) => {
       console.log(`[Upload] Starting upload for ${task.file.name} (${formatFileSize(task.file.size)}) - Task ID: ${task.id}`);
 
+      benchMark(task.id, 'start', {
+        bytes: task.file.size,
+        path: needsChunking(task.file.size) ? 'chunked' : UPLOAD_MODE,
+      });
+
       const abortController = new AbortController();
       activeUploadRefs.current.set(task.id, abortController);
 
@@ -308,11 +410,14 @@ export const useFileUpload = () => {
         try {
           if (needsChunking(task.file.size)) {
             await uploadFileChunkedWrapper(task, abortController);
+          } else if (UPLOAD_MODE === 'proxy') {
+            await uploadFileProxied(task, abortController);
           } else {
             await uploadFileDirect(task, abortController);
           }
 
           if (!abortController.signal.aborted) {
+            benchMark(task.id, 'completed');
             console.log(`[Upload] Successfully uploaded ${task.file.name} - Task ID: ${task.id}`);
             setUploadQueue((currentQueue) =>
               currentQueue.map((t) =>
@@ -322,6 +427,7 @@ export const useFileUpload = () => {
           }
         } catch (error: any) {
           if (!abortController.signal.aborted) {
+            benchMark(task.id, 'failed', { message: String(error?.message ?? error) });
             console.error(`[Upload] Upload failed for ${task.file.name}:`, error);
             // Extract better error message
             let errorMessage = 'Upload failed';
@@ -367,7 +473,7 @@ export const useFileUpload = () => {
         }
       })();
     });
-  }, [uploadQueue, activeUploads, uploadFileDirect, uploadFileChunkedWrapper, updateUploadMetrics]);
+  }, [uploadQueue, activeUploads, uploadFileDirect, uploadFileProxied, uploadFileChunkedWrapper, updateUploadMetrics]);
 
   // Add files to queue with validation feedback
   const addFiles = useCallback(
@@ -510,6 +616,13 @@ export const useFileUpload = () => {
       activeUploadRefs.current.delete(taskId);
     }
 
+    // An explicit cancel means the user does not intend to resume this file.
+    // Leaving the record would silently resume it on the next selection.
+    const cancelled = uploadQueue.find((t) => t.id === taskId);
+    if (cancelled && needsChunking(cancelled.file.size)) {
+      clearSessionForFile(cancelled.file).catch(() => {});
+    }
+
     const timer = progressTimers.current.get(taskId);
     if (timer) {
       clearInterval(timer);
@@ -522,7 +635,7 @@ export const useFileUpload = () => {
       )
     );
     setActiveUploads((prev) => Math.max(0, prev - 1));
-  }, []);
+  }, [uploadQueue, clearSessionForFile]);
 
   // Retry upload
   const retryUpload = useCallback(

@@ -5,6 +5,7 @@ import com.rapidphoto.domain.user.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -17,6 +18,11 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.*;
 
 @DataJpaTest
+// @DataJpaTest swaps in its own embedded datasource by default, which discards
+// the H2 URL configured for the test profile -- including the domain that
+// aliases the Postgres-only jsonb type. Without that alias the photos table is
+// never created and every query here fails on a missing table.
+@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @ActiveProfiles("test")
 @Transactional
 class PhotoRepositoryTest {

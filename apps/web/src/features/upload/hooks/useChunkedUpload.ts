@@ -2,10 +2,15 @@ import { useState, useCallback } from 'react';
 import { uploadApi } from '../../../api/upload';
 import { CHUNK_SIZE, processChunk } from '../../../utils/uploadWorker';
 import { ChunkUploadResponse } from '../../../types/upload.types';
+import { fingerprintFile, isSameFileShape } from '../../../utils/fileFingerprint';
+import { deleteSession, getSession, putSession, pruneSessions } from '../../../utils/uploadSessionStore';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000; // 1 second base delay
 const PARALLEL_CHUNKS_PER_FILE = 10; // Upload 10 chunks in parallel per file for ultra-fast speed
+
+/** Mirrors the backend's upload.cleanup.ttl-minutes default (120 minutes). */
+const SESSION_TTL_MS = 120 * 60 * 1000;
 
 interface ChunkUploadState {
   photoId: string;
@@ -13,6 +18,7 @@ interface ChunkUploadState {
   uploadedChunks: number;
   failedChunks: Set<number>;
   isComplete: boolean;
+  resumed: boolean;
 }
 
 export const useChunkedUpload = () => {
@@ -50,49 +56,103 @@ export const useChunkedUpload = () => {
     []
   );
 
+  /**
+   * Decide whether this file continues an upload the server already knows
+   * about, or starts a new one.
+   *
+   * A stored session is only trusted after two independent checks: the file
+   * still has the same name, size and mtime as when the session was recorded,
+   * and the server still returns progress for that photoId. The server call is
+   * what actually authorises it -- it verifies the caller owns the photo, and
+   * returns 404 once the upload has been collected as abandoned, at which point
+   * the local record is dropped and the upload restarts cleanly.
+   */
+  const resolveSession = useCallback(
+    async (file: File, totalChunks: number): Promise<{
+      photoId: string;
+      received: Set<number>;
+      fingerprint: string;
+      resumed: boolean;
+    }> => {
+      const fingerprint = await fingerprintFile(file);
+      const saved = await getSession(fingerprint);
+
+      if (saved && isSameFileShape(file, saved)) {
+        try {
+          const progress = await uploadApi.getChunkProgress(saved.photoId, totalChunks);
+          return {
+            photoId: saved.photoId,
+            received: new Set(progress.receivedChunks ?? []),
+            fingerprint,
+            resumed: true,
+          };
+        } catch {
+          // Gone, expired, or not ours. Fall through and start over.
+          await deleteSession(fingerprint);
+        }
+      }
+
+      const initResponse = await uploadApi.initializeUpload(file.name, file.type, file.size);
+      await putSession({
+        fingerprint,
+        photoId: initResponse.photoId,
+        fileName: file.name,
+        fileSize: file.size,
+        lastModified: file.lastModified,
+        totalChunks,
+      });
+
+      return { photoId: initResponse.photoId, received: new Set<number>(), fingerprint, resumed: false };
+    },
+    []
+  );
+
   const uploadFileChunked = useCallback(
     async (
       file: File,
       onProgress?: (photoId: string, progress: number, uploadedChunks: number, totalChunks: number) => void
     ): Promise<string> => {
       const totalChunks = calculateTotalChunks(file.size);
+      const { photoId, received, fingerprint, resumed } = await resolveSession(file, totalChunks);
 
-      // Initialize upload (userId comes from JWT token)
-      const initResponse = await uploadApi.initializeUpload(
-        file.name,
-        file.type,
-        file.size
-      );
-
-      const photoId = initResponse.photoId;
-
-      // Initialize state
       setUploadState((prev) => {
         const newState = new Map(prev);
         newState.set(photoId, {
           photoId,
           totalChunks,
-          uploadedChunks: 0,
+          uploadedChunks: received.size,
           failedChunks: new Set(),
-          isComplete: false,
+          isComplete: received.size === totalChunks,
+          resumed,
         });
         return newState;
       });
 
-      // Upload chunks in parallel (10 at a time) for ultra-fast performance
-      let currentChunk = 0;
+      let missing = Array.from({ length: totalChunks }, (_, i) => i).filter((n) => !received.has(n));
 
-      while (currentChunk < totalChunks) {
-        // Determine how many chunks to upload in this batch
-        const batchSize = Math.min(PARALLEL_CHUNKS_PER_FILE, totalChunks - currentChunk);
-        const chunkPromises: Promise<{ chunkNumber: number; response: ChunkUploadResponse }>[] = [];
+      if (resumed) {
+        console.log(
+          `[Chunked] Resuming ${file.name}: ${received.size}/${totalChunks} chunks already on server, sending ${missing.length}`
+        );
+        onProgress?.(photoId, (received.size / totalChunks) * 100, received.size, totalChunks);
+      }
 
-        // Create promises for parallel chunk uploads
-        for (let i = 0; i < batchSize; i++) {
-          const chunkNumber = currentChunk + i;
+      // Every chunk is already stored but the file was never assembled -- the
+      // process died between the last chunk landing and assembly starting.
+      // Re-sending one chunk is enough: the server treats a duplicate as a
+      // completeness check and starts assembly if nothing else will.
+      if (missing.length === 0 && totalChunks > 0) {
+        missing = [totalChunks - 1];
+      }
+
+      let highestUploaded = received.size;
+
+      for (let i = 0; i < missing.length; i += PARALLEL_CHUNKS_PER_FILE) {
+        const batch = missing.slice(i, i + PARALLEL_CHUNKS_PER_FILE);
+
+        const chunkPromises = batch.map((chunkNumber) => {
           const chunkBlob = processChunk(file, chunkNumber, CHUNK_SIZE);
-
-          const promise = uploadChunkWithRetry(photoId, chunkNumber, totalChunks, chunkBlob)
+          return uploadChunkWithRetry(photoId, chunkNumber, totalChunks, chunkBlob)
             .then((response) => ({ chunkNumber, response }))
             .catch((error) => {
               console.error(`Failed to upload chunk ${chunkNumber}:`, error);
@@ -106,47 +166,41 @@ export const useChunkedUpload = () => {
               });
               throw error;
             });
+        });
 
-          chunkPromises.push(promise);
-        }
+        const results = await Promise.all(chunkPromises);
 
-        // Wait for all chunks in this batch to complete
-        try {
-          const results = await Promise.all(chunkPromises);
+        // Chunks in a batch complete out of order, so the last response to
+        // arrive is not necessarily the highest count. Take the maximum.
+        highestUploaded = results.reduce(
+          (max, { response }) => Math.max(max, response.uploadedChunks ?? 0),
+          highestUploaded
+        );
 
-          // Update state with all completed chunks
-          results.forEach(({ chunkNumber, response }) => {
-            setUploadState((prev) => {
-              const newState = new Map(prev);
-              const state = newState.get(photoId);
-              if (state) {
-                state.uploadedChunks = response.uploadedChunks;
-                state.failedChunks.delete(chunkNumber);
-                if (response.uploadedChunks === totalChunks) {
-                  state.isComplete = true;
-                }
-              }
-              return newState;
-            });
-          });
-
-          // Report progress with the latest response
-          if (onProgress && results.length > 0) {
-            const latestResponse = results[results.length - 1].response;
-            const progress = (latestResponse.uploadedChunks / totalChunks) * 100;
-            onProgress(photoId, progress, latestResponse.uploadedChunks, totalChunks);
+        setUploadState((prev) => {
+          const newState = new Map(prev);
+          const state = newState.get(photoId);
+          if (state) {
+            state.uploadedChunks = highestUploaded;
+            results.forEach(({ chunkNumber }) => state.failedChunks.delete(chunkNumber));
+            if (highestUploaded >= totalChunks) {
+              state.isComplete = true;
+            }
           }
-        } catch (error) {
-          // If any chunk in the batch fails, throw error to stop upload
-          throw error;
-        }
+          return newState;
+        });
 
-        currentChunk += batchSize;
+        onProgress?.(photoId, (highestUploaded / totalChunks) * 100, highestUploaded, totalChunks);
       }
+
+      // The upload is the server's problem from here; nothing local needs to
+      // survive, and a stale record would make the next attempt at this file
+      // query a photoId that is already finished.
+      await deleteSession(fingerprint);
 
       return photoId;
     },
-    [calculateTotalChunks, uploadChunkWithRetry]
+    [calculateTotalChunks, resolveSession, uploadChunkWithRetry]
   );
 
   const retryFailedChunks = useCallback(
@@ -199,11 +253,35 @@ export const useChunkedUpload = () => {
     [uploadState]
   );
 
+  /**
+   * Forget the stored session for a file the user cancelled. Re-derives the
+   * fingerprint rather than threading it through the queue: it costs a 192 KiB
+   * read on an action the user just took deliberately, which is cheaper than
+   * carrying the value through every task transition.
+   */
+  const clearSessionForFile = useCallback(async (file: File): Promise<void> => {
+    try {
+      await deleteSession(await fingerprintFile(file));
+    } catch {
+      // A session we cannot delete is collected by pruneStaleSessions later.
+    }
+  }, []);
+
+  /**
+   * Drop local records the server has already collected. Matches the backend's
+   * upload.cleanup.ttl-minutes default; a local record outliving the server's
+   * chunks would only produce a resume attempt that 404s and restarts anyway.
+   */
+  const pruneStaleSessions = useCallback(async (): Promise<number> => {
+    return pruneSessions(SESSION_TTL_MS);
+  }, []);
+
   return {
     uploadFileChunked,
     retryFailedChunks,
     getUploadState,
     calculateTotalChunks,
+    clearSessionForFile,
+    pruneStaleSessions,
   };
 };
-

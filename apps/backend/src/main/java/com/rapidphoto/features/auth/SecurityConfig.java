@@ -10,6 +10,7 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
@@ -48,6 +49,19 @@ public class SecurityConfig {
                 .requestMatchers("/api/**").authenticated()
                 // Allow all other requests (for static resources, etc.)
                 .anyRequest().permitAll()
+            )
+            // Without an explicit entry point Spring answers an unauthenticated
+            // request to a protected endpoint with 403, which tells a client it
+            // is forbidden rather than that it needs to authenticate. For a
+            // bearer-token API the distinction matters: 401 is the signal to
+            // obtain or refresh a token, 403 means the token is fine but the
+            // resource is not theirs.
+            .exceptionHandling(ex -> ex
+                .authenticationEntryPoint((request, response, authException) -> {
+                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                    response.setContentType("application/json");
+                    response.getWriter().write("{\"error\":\"Authentication required\"}");
+                })
             )
             .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
 

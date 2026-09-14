@@ -80,6 +80,7 @@ storage:
     region: ${AWS_REGION:us-east-1}
     access-key: ${AWS_ACCESS_KEY}
     secret-key: ${AWS_SECRET_KEY}
+    path-style-access: ${S3_PATH_STYLE_ACCESS:false}
 
 # Concurrency Configuration
 upload:

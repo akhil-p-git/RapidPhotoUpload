@@ -15,6 +15,9 @@ import java.util.UUID;
 public interface PhotoRepository extends JpaRepository<Photo, UUID> {
     List<Photo> findByUserIdOrderByUploadedAtDesc(UUID userId);
     List<Photo> findByStatus(PhotoStatus status);
+
+    /** Incomplete uploads older than a cutoff -- see AbandonedUploadCleanupService. */
+    List<Photo> findByStatusAndUploadedAtBefore(PhotoStatus status, LocalDateTime cutoff);
     List<Photo> findByUploadSessionId(UUID uploadSessionId);
     
     // Paginated queries for gallery

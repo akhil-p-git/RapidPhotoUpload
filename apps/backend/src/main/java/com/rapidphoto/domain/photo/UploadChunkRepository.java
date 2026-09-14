@@ -15,5 +15,7 @@ public interface UploadChunkRepository extends JpaRepository<UploadChunk, UUID> 
 
     List<UploadChunk> findByPhotoIdOrderByChunkNumberAsc(UUID photoId);
 
+    List<UploadChunk> findByPhotoIdAndStatusOrderByChunkNumberAsc(UUID photoId, UploadChunk.ChunkStatus status);
+
     List<UploadChunk> findByPhotoId(UUID photoId);
 }

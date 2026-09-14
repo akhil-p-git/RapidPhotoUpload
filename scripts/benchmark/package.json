@@ -1,0 +1,18 @@
+{
+  "name": "@rapid-photo/benchmark",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Reproducible upload benchmark: proxy vs presigned, driven through the real React client.",
+  "scripts": {
+    "fixtures": "node src/generate-fixtures.mjs",
+    "bench": "node src/run.mjs",
+    "minio:up": "docker compose -f docker-compose.minio.yml up -d",
+    "minio:down": "docker compose -f docker-compose.minio.yml down -v",
+    "postinstall": "playwright install chromium"
+  },
+  "dependencies": {
+    "playwright": "^1.49.1",
+    "sharp": "^0.33.5"
+  }
+}

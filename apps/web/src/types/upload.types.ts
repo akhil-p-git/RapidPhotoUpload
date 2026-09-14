@@ -26,6 +26,8 @@ export interface ChunkUploadResponse {
   totalChunks: number;
   progress: number;
   missingChunks?: number[];
+  /** Chunk numbers the server already holds. Explicit, because chunks upload in parallel and arrive out of order. */
+  receivedChunks?: number[];
   message: string;
 }
 
